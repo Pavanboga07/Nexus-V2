@@ -11,10 +11,20 @@ and no replay: a process restart loses everything undelivered.
 1. Call `POST /api/v1/events/ticket` with the REST bearer token.
    The response carries one cryptographically random ticket plus its
    UTC expiry (60 seconds by default, `NEXUS_API_TICKET_TTL_S`).
-2. Open `/api/v1/events/ws` within that window, presenting the ticket
-   either as a `Sec-WebSocket-Protocol` entry
-   `nexus-ticket.<ticket>` (preferred — URLs may be logged by
-   intermediaries) or as a `?ticket=` query parameter.
+2. Open `/api/v1/events/ws` within that window, presenting the
+   ticket as a `Sec-WebSocket-Protocol` entry
+   `nexus-ticket.<ticket>` — the only accepted slot. In a browser:
+
+   ```js
+   const {ticket} = await (await fetch("/api/v1/events/ticket",
+     {method: "POST", headers: {Authorization: "Bearer " + token}}
+   )).json();
+   const ws = new WebSocket("ws://127.0.0.1:8000/api/v1/events/ws",
+     ["nexus-ticket." + ticket]);
+   ```
+   Query-string tickets are not honored: server access logs record
+   request paths including query strings, which would persist a
+   bearer-equivalent credential outside the application's control.
 3. The ticket is consumed exactly once: expired, unknown, reused, or
    foreign-owner tickets close the socket with code `4401`. Simultaneous
    redemptions race safely — exactly one wins.
@@ -73,8 +83,13 @@ re-query REST state (`GET /requests/{id}`, conversation history),
 then consume new events. Tickets are never reused and in-memory
 queues do not survive restarts.
 
-Normal completion and shutdown close with `1001`; overload closes
-with `1013`; authentication failures close with `4401`.
+Peer-gone disconnects attempt `1001`; overload and shutdown
+sweeps close with `1013` ("try again later" — the hub marks
+overloaded subscriptions closed and drops them, and shutdown clears
+every subscription, so pumps observing the close signal terminate
+with `1013`); authentication failures close with `4401`. Cancelled
+server tasks close no frame at all: the transport simply goes away,
+and the client must reconnect with a fresh ticket.
 
 ## Scaling limits
 

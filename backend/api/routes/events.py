@@ -14,7 +14,8 @@ import logging
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, Request, WebSocket
+from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from backend.api import deps
@@ -86,11 +87,12 @@ async def events_socket(websocket: WebSocket) -> None:
     """Authenticated event stream for the ticket's owner."""
     settings = websocket.app.state.settings
     if not _origin_allowed(websocket, settings):
-        await websocket.close(code=4403)
-        return
+        # Deny the upgrade before accepting: Starlette translates a
+        # WebSocketException raised pre-accept into a 403 handshake
+        # rejection (no socket, no ticket consumption).
+        raise WebSocketException(code=4403)
     await websocket.accept()
-    query = dict(websocket.query_params)
-    ticket = _ticket_from_headers(websocket) or query.get("ticket")
+    ticket = _ticket_from_headers(websocket)
     state = websocket.app.state.api
     if (
         state is None

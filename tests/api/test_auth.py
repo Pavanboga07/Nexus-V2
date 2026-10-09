@@ -68,3 +68,29 @@ async def test_token_never_echoed(db):
     assert response.status_code == 401
     assert TOKEN not in response.text
     assert "x" * 64 not in response.text
+
+
+@pytest.mark.asyncio
+async def test_non_ascii_bearer_rejected_without_error(db):
+    from starlette.requests import Request
+
+    from backend.api import deps
+
+    settings = make_settings()
+    app = create_app(settings, state=make_state(db, settings)[0])
+    scope = {
+        "type": "http",
+        "headers": [(b"authorization",
+                     "Bearer caf\u00e9-token".encode("latin-1"))],
+        "app": app,
+        "state": dict(app.state._state),
+    }
+    from backend.api.errors import ApiError
+
+    # httpx cannot even encode such a header, so exercise the real
+    # dependency directly: it must fail closed as 401, never 500,
+    # without touching any route side effect.
+    with pytest.raises(ApiError) as exc_info:
+        await deps.authenticate(Request(scope))
+    assert exc_info.value.status == 401
+    assert exc_info.value.code == "UNAUTHORIZED"

@@ -83,6 +83,11 @@ async def _wait_for_sent(fake, count, timeout=10.0):
     return fake.sent
 
 
+def _ws_ticket_headers(ticket):
+    """Subprotocol headers carrying a ticket (the only supported slot)."""
+    return {"sec-websocket-protocol": f"nexus-ticket.{ticket}"}
+
+
 # -- hub units ---------------------------------------------------------------
 
 def test_hub_fanout_and_unsubscribe():
@@ -194,12 +199,43 @@ async def test_ticket_ttl_from_settings(db):
 async def test_ws_missing_and_bad_tickets_close_4401(db):
     settings = make_settings()
     app = create_app(settings, state=make_state(db, settings)[0])
-    for query in ("", "ticket=nope"):
-        fake = FakeWebSocket(app, query=query)
+    cases = [
+        FakeWebSocket(app),
+        FakeWebSocket(
+            app, headers=_ws_ticket_headers("nope")),
+    ]
+    for fake in cases:
         await events_socket(fake)
         assert fake.accepted is True
         assert fake.close_code == CLOSE_UNAUTHORIZED
         assert fake.sent == []
+
+
+@pytest.mark.asyncio
+async def test_ws_query_string_ticket_rejected(db):
+    settings = make_settings()
+    state, _ = make_state(db, settings)
+    app = create_app(settings, state=state)
+    payload = await _ticket(app)
+    # Tickets in the URL are never honored, even when valid: URLs are
+    # logged by intermediaries, so this slot is closed entirely.
+    fake = FakeWebSocket(app, query=f"ticket={payload['ticket']}")
+    await events_socket(fake)
+    assert fake.accepted is True
+    assert fake.close_code == CLOSE_UNAUTHORIZED
+    assert fake.sent == []
+    assert state.events.subscriber_count == 0
+
+
+@pytest.mark.asyncio
+async def test_ws_bearer_token_is_not_a_ticket(db):
+    settings = make_settings()
+    state, _ = make_state(db, settings)
+    app = create_app(settings, state=state)
+    fake = FakeWebSocket(app, headers=_ws_ticket_headers(TOKEN))
+    await events_socket(fake)
+    assert fake.close_code == CLOSE_UNAUTHORIZED
+    assert state.events.subscriber_count == 0
 
 
 @pytest.mark.asyncio
@@ -208,8 +244,10 @@ async def test_ws_ticket_reuse_fails_second(db):
     state, _ = make_state(db, settings)
     app = create_app(settings, state=state)
     payload = await _ticket(app)
-    first = FakeWebSocket(app, query=f"ticket={payload['ticket']}")
-    second = FakeWebSocket(app, query=f"ticket={payload['ticket']}")
+    first = FakeWebSocket(
+        app, headers=_ws_ticket_headers(payload['ticket']))
+    second = FakeWebSocket(
+        app, headers=_ws_ticket_headers(payload['ticket']))
     first_task = asyncio.ensure_future(events_socket(first))
     await asyncio.sleep(0.2)
     await events_socket(second)
@@ -231,8 +269,9 @@ async def test_ws_concurrent_redeem_exactly_one_wins(db):
     state, _ = make_state(db, settings)
     app = create_app(settings, state=state)
     payload = await _ticket(app)
-    query = f"ticket={payload['ticket']}"
-    fakes = [FakeWebSocket(app, query=query) for _ in range(2)]
+    query = payload['ticket']
+    fakes = [FakeWebSocket(app, headers=_ws_ticket_headers(query))
+             for _ in range(2)]
     tasks = [asyncio.ensure_future(events_socket(fake)) for fake in fakes]
     await asyncio.sleep(0.5)
     codes = sorted(fake.close_code or 0 for fake in fakes)
@@ -256,7 +295,7 @@ async def test_ws_foreign_owner_ticket_rejected(db):
     state, _ = make_state(db, settings)
     app = create_app(settings, state=state)
     ticket, _ = state.tickets.issue(uuid_mod.uuid4())
-    fake = FakeWebSocket(app, query=f"ticket={ticket}")
+    fake = FakeWebSocket(app, headers=_ws_ticket_headers(ticket))
     await events_socket(fake)
     assert fake.close_code == CLOSE_UNAUTHORIZED
 
@@ -286,14 +325,20 @@ async def test_ws_subprotocol_ticket_preferred(db):
 
 @pytest.mark.asyncio
 async def test_ws_disallowed_origin_rejected_before_accept(db):
+    from fastapi import WebSocketException
+
     settings = make_settings()
     app = create_app(settings, state=make_state(db, settings)[0])
     fake = FakeWebSocket(
         app, headers={"origin": "https://evil.example",
                       "host": "127.0.0.1:8000"})
-    await events_socket(fake)
+    # Denial raises before any accept: no socket, no ticket spent.
+    # Over a real server Starlette translates this to HTTP 403 on
+    # the handshake (verified against live uvicorn).
+    with pytest.raises(WebSocketException) as exc_info:
+        await events_socket(fake)
+    assert exc_info.value.code == 4403
     assert fake.accepted is False
-    assert fake.close_code == 4403
 
 
 @pytest.mark.asyncio
@@ -304,8 +349,9 @@ async def test_ws_same_and_listed_origins_accepted(db):
     payload = await _ticket(app)
     same = FakeWebSocket(
         app, headers={"origin": "http://127.0.0.1:8000",
-                      "host": "127.0.0.1:8000"},
-        query=f"ticket={payload['ticket']}")
+                      "host": "127.0.0.1:8000",
+                      "sec-websocket-protocol":
+                      f"nexus-ticket.{payload['ticket']}"})
     same_task = asyncio.ensure_future(events_socket(same))
     await asyncio.sleep(0.2)
     try:
@@ -324,8 +370,9 @@ async def test_ws_same_and_listed_origins_accepted(db):
     listed_payload = await _ticket(listed_app)
     listed = FakeWebSocket(
         listed_app, headers={"origin": "https://app.example",
-                             "host": "127.0.0.1:8000"},
-        query=f"ticket={listed_payload['ticket']}")
+                             "host": "127.0.0.1:8000",
+                             "sec-websocket-protocol":
+                             f"nexus-ticket.{listed_payload['ticket']}"})
     listed_task = asyncio.ensure_future(events_socket(listed))
     await asyncio.sleep(0.2)
     try:
@@ -433,7 +480,8 @@ async def test_turn_completed_event_arrives(db):
     app = create_app(settings, state=state)
     agent = await seed_owned_agent(db, keys)
     payload = await _ticket(app)
-    fake = FakeWebSocket(app, query=f"ticket={payload['ticket']}")
+    fake = FakeWebSocket(
+        app, headers=_ws_ticket_headers(payload['ticket']))
     task = asyncio.ensure_future(events_socket(fake))
     await asyncio.sleep(0.2)
     try:
@@ -473,7 +521,8 @@ async def test_request_created_event_arrives(db):
     app = create_app(settings, state=state)
     local, remote = await seed_peer_pair(db, keys)
     payload = await _ticket(app)
-    fake = FakeWebSocket(app, query=f"ticket={payload['ticket']}")
+    fake = FakeWebSocket(
+        app, headers=_ws_ticket_headers(payload['ticket']))
     task = asyncio.ensure_future(events_socket(fake))
     await asyncio.sleep(0.2)
     try:
@@ -516,7 +565,8 @@ async def test_failed_turn_emits_no_event(db):
     app = create_app(settings, state=state)
     agent = await seed_owned_agent(db, keys)
     payload = await _ticket(app)
-    fake = FakeWebSocket(app, query=f"ticket={payload['ticket']}")
+    fake = FakeWebSocket(
+        app, headers=_ws_ticket_headers(payload['ticket']))
     task = asyncio.ensure_future(events_socket(fake))
     await asyncio.sleep(0.2)
     try:
@@ -544,7 +594,8 @@ async def test_reconnect_flow_with_fresh_ticket(db):
     state, _ = make_state(db, settings)
     app = create_app(settings, state=state)
     first = FakeWebSocket(
-        app, query=f"ticket={(await _ticket(app))['ticket']}")
+        app, headers=_ws_ticket_headers(
+            (await _ticket(app))['ticket']))
     task = asyncio.ensure_future(events_socket(first))
     await asyncio.sleep(0.2)
     try:
@@ -558,7 +609,8 @@ async def test_reconnect_flow_with_fresh_ticket(db):
             pass
     assert state.events.subscriber_count == 0
     second = FakeWebSocket(
-        app, query=f"ticket={(await _ticket(app))['ticket']}")
+        app, headers=_ws_ticket_headers(
+            (await _ticket(app))['ticket']))
     task2 = asyncio.ensure_future(events_socket(second))
     await asyncio.sleep(0.2)
     try:
