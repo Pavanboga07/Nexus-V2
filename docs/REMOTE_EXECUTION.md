@@ -20,6 +20,12 @@ status, or an `approved` flag:
 - Peer `(local, sender)` is still `connected`.
 - `expires_at` is in the future; an expired row moves to `EXPIRED` in
   its own transaction and is never executed.
+- The local agent's signing identity is available
+  (`private_key_for(local_agent_id)` succeeds). This is checked inside
+  the claim transaction *before* `APPROVED → PROCESSING` commits and
+  before the Agent Runtime runs: a missing key raises `ExecutionError`,
+  the row stays `APPROVED` (recoverable once the identity is
+  restored), and no model or MCP tool ever runs.
 
 Anything else raises a typed error with zero model or tool calls.
 
@@ -56,7 +62,13 @@ atomically, guarded by re-checking `PROCESSING` (a mid-flight operator
 - Success: `REMOTE_RESPONSE` (`status="ok"`, agent's final text),
   signed by the local agent, `request_id` preserved, fresh
   `message_id`, sender/recipient set to executor/requester,
-  expiry inherited from the request.
+  expiry inherited from the request. Success additionally requires
+  more than `RESPONSE_EXPIRY_MARGIN_S` (10 s) of remaining lifetime at
+  finalization: a response expiring at or within the margin would pass
+  the executor's check yet fail the outbox worker's existing expiry
+  validation on the next dispatch, leaving an undeliverable
+  `COMPLETED`. Such near-expiry successes take the expiry failure
+  path below instead — no success is claimed and no second run occurs.
 - Agent/model failure: `REMOTE_RESPONSE` (`status="error"`,
   `error_code="EXECUTION_FAILED"`, static safe message — never
   exception text, tool output, or keys) plus `FAILED` state.
