@@ -101,8 +101,11 @@ class _FakeClient:
 
     async def send_message(self, envelope, timeout=None):
         from backend.gateway_client.errors import AckTimeoutError, ConnectionLostError
+        from backend.gateway_client.errors import MessageTooLargeError
         from backend.gateway_client.models import AckResult as Ack
 
+        if self.behavior == "too-large":
+            raise MessageTooLargeError("envelope exceeds the size limit")
         self.sent.append(copy.deepcopy(envelope))
         mid = envelope["message_id"]
         rid = envelope.get("request_id", "")
@@ -237,3 +240,23 @@ async def test_message_is_not_resigned(db):  # 32
             {**row.envelope, "signature": row.signature})
         assert verify_message(rebuilt, sender.public_key, now=NOW) is not None
         assert sent == {**row.envelope, "signature": row.signature}
+
+
+@pytest.mark.asyncio
+async def test_oversize_rejection_is_permanent_not_ambiguous(db):
+    keys = _Keys()
+    worker = _worker(db, keys, behavior="too-large")
+    sender, _, records = await _seed(db, keys, 1)
+    results = await worker.run_once()
+    matches = [r for r in results if r.message_id == records[0].message_id]
+    assert len(matches) == 1
+    assert matches[0].outcome.value == "PERMANENT"
+    assert matches[0].detail == "MESSAGE_TOO_LARGE"
+    async with db.sessions() as session:
+        row = await OutboxRepository(session).get(records[0].message_id)
+        assert row is not None and row.status == "FAILED"
+        assert "MESSAGE_TOO_LARGE" in (row.last_error or "")
+    # Deterministic pre-send rejection: nothing was ever transmitted.
+    assert worker.fakes[sender.agent_id].sent == []
+    record = await worker._service.get_request(records[0].request_id)
+    assert record is not None and record.status == "FAILED"

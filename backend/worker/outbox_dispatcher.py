@@ -35,6 +35,7 @@ from backend.gateway_client.errors import (
     AckTimeoutError,
     ConnectionLostError,
     HandshakeFailedError,
+    MessageTooLargeError,
     NotConnectedError,
 )
 from backend.gateway_client.models import ConnectionState
@@ -318,6 +319,15 @@ class OutboxDispatcher:
         try:
             ack = await client.send_message(
                 wire, timeout=self._config.ack_timeout_s
+            )
+        except MessageTooLargeError:
+            # Deterministic pre-send rejection (no byte moved): the
+            # signed bytes can never dispatch, so this is permanent —
+            # never an ambiguous transmission.
+            return await self._fail_permanent(
+                message_id, claim_token, request_id, attempts,
+                "MESSAGE_TOO_LARGE",
+                "message exceeds the gateway size limit",
             )
         except (AckTimeoutError, ConnectionLostError, OSError) as exc:
             return await self._mark_uncertain(

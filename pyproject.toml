@@ -2,6 +2,18 @@
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.packages.find]
+# Explicit discovery (flat layout, namespace packages): the installable
+# payload is the ``backend`` namespace only. ``backend.identity`` and
+# ``backend.protocol`` are stdlib-plus-cryptography, so downstream
+# consumers (e.g. the standalone Gateway) can install this
+# distribution with ``--no-deps`` and import just those two modules
+# without the LangGraph/MCP/persistence stack, which nothing outside
+# the application itself imports.
+where = ["."]
+include = ["backend*"]
+namespaces = true
+
 [project]
 name = "nexus-v2"
 version = "0.8.0"
