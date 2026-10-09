@@ -27,6 +27,7 @@ or tools, and never interprets payload meaning beyond the protocol's
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -46,6 +47,8 @@ from backend.requests.service import RequestService
 if TYPE_CHECKING:  # pragma: no cover - typing only; avoids an import cycle
     from backend.inbound.dispatcher import InboundDispatcher
 
+logger = logging.getLogger("nexus.responses")
+
 from .errors import ResponseReceiverError
 from .models import DUPLICATE, REGISTERED, REJECTED, ResponseOutcome
 
@@ -62,16 +65,24 @@ class ResponseReceiver:
         sessions: async_sessionmaker[AsyncSession],
         local_agent_id: str,
         identities: Any,
+        on_registered: Any | None = None,
     ) -> None:
         """Wire one originating agent to the durable response handling.
 
         ``identities`` satisfies the service constructor; response
         verification uses the responder's *stored* public key, never
         local private key material.
+
+        ``on_registered`` is an optional synchronous callback invoked
+        with the :class:`ResponseOutcome` exactly once per accepted
+        response (never for duplicates or rejections, which record
+        nothing). Callback failures are logged and swallowed: they
+        must never undo or obscure the committed outcome.
         """
         self._sessions = sessions
         self._local_agent_id = local_agent_id
         self._service = RequestService(sessions, identities)
+        self._on_registered = on_registered
 
     @property
     def local_agent_id(self) -> str:
@@ -115,13 +126,22 @@ class ResponseReceiver:
             )
         except ResponseCorrelationError as exc:
             return await self._classify_rejection(message, exc)
-        return ResponseOutcome(
+        outcome = ResponseOutcome(
             status=REGISTERED,
             request_id=message.request_id,
             response_message_id=record.response_message_id,
             detail=record.status,
             record=record,
         )
+        if self._on_registered is not None:
+            try:
+                self._on_registered(outcome)
+            except Exception:  # noqa: BLE001 - notify only, never fails
+                logger.warning(
+                    "response callback failed for %s",
+                    message.message_id,
+                )
+        return outcome
 
     async def _classify_rejection(
         self, message: NexusMessage, exc: ResponseCorrelationError

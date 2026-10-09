@@ -46,6 +46,12 @@ class ApiSettings:
     identity_keys_path: str | None = None
     # Extra knobs with safe defaults (tests override the object).
     extra: dict = field(default_factory=dict)
+    # Explicit browser origins allowed on the WebSocket endpoint, in
+    # addition to same-origin requests. Empty means same-origin (plus
+    # origin-less non-browser clients) only; never "*".
+    allowed_origins: tuple = ()
+    # WebSocket ticket lifetime in seconds (short by design).
+    ticket_ttl_seconds: float = 60.0
 
     @classmethod
     def from_env(
@@ -74,6 +80,19 @@ class ApiSettings:
             if not 1 <= port <= 65535:
                 raise ValueError(f"{prefix}PORT must be 1-65535")
         flag_raw = _get(env, prefix + "ENABLE_GATEWAY_IO")
+        origins_raw = _get(env, prefix + "ALLOWED_ORIGINS")
+        ttl_raw = _get(env, prefix + "TICKET_TTL_S")
+        ttl = 60.0
+        if ttl_raw is not None:
+            try:
+                ttl = float(ttl_raw)
+            except ValueError as exc:
+                raise ValueError(
+                    f"{prefix}TICKET_TTL_S must be a number"
+                ) from exc
+            if ttl <= 0:
+                raise ValueError(
+                    f"{prefix}TICKET_TTL_S must be positive")
         return cls(
             api_token=_get(env, prefix + "TOKEN"),
             owner_user_id=owner,
@@ -89,6 +108,11 @@ class ApiSettings:
             ),
             mcp_config_path=_get(env, prefix + "MCP_CONFIG_PATH"),
             identity_keys_path=_get(env, prefix + "IDENTITY_KEYS_PATH"),
+            allowed_origins=tuple(
+                origin.strip() for origin in (origins_raw or "").split(",")
+                if origin.strip()
+            ),
+            ticket_ttl_seconds=ttl,
         )
 
     @property

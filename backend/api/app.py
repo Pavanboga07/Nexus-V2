@@ -32,7 +32,18 @@ from backend.agent.config import AgentRuntimeConfig
 from backend.agent.conversation_service import ConversationService
 from backend.agent.runtime import AgentRuntime
 from backend.api.errors import ApiError
-from backend.api.routes import agents, conversations, health, requests
+from backend.api.events import (
+    APPROVAL_REQUIRED,
+    EXECUTION_UPDATED,
+    REQUEST_CREATED,
+    REQUEST_UPDATED,
+    RESPONSE_RECEIVED,
+    TURN_COMPLETED,
+    EventHub,
+    TicketStore,
+    make_event,
+)
+from backend.api.routes import agents, conversations, events, health, requests
 from backend.api.settings import ApiSettings
 from backend.identity.keys import private_key_from_bytes
 from backend.identity.models import AgentIdentity
@@ -67,6 +78,8 @@ class ApiState:
     worker: Any = None
     worker_task: Any = None
     mcp_manager: Any = None
+    events: Any = field(default_factory=EventHub)
+    tickets: Any = field(default_factory=TicketStore)
 
 
 class FileIdentityProvider:
@@ -156,6 +169,7 @@ async def build_production_state(
     engine = create_engine(get_database_url())
     sessions = create_session_factory(engine)
     state = ApiState(settings=settings, sessions=sessions, engine=engine)
+    state.tickets = TicketStore(ttl_seconds=settings.ticket_ttl_seconds)
     try:
         await check_connectivity(engine)
         await _open_optional(state, settings)
@@ -196,16 +210,38 @@ async def _open_gateway_io(state: ApiState, settings: ApiSettings) -> None:
             "gateway I/O requires NEXUS_API_IDENTITY_KEYS_PATH"
         )
     provider = state.identities
+    hub = state.events
     for agent_id in provider.agent_ids:
         client = GatewayClient(
             provider.identity_for(agent_id), settings.gateway_url)
         await client.connect()
         state.gateway_clients[agent_id] = client
-        processor = InboundProcessor(state.sessions, agent_id)
+
+        def _on_query(message, _hub=hub):
+            _hub.publish(make_event(APPROVAL_REQUIRED, {
+                "request_id": message.request_id,
+                "sender": message.sender,
+                "recipient": message.recipient,
+            }))
+
+        def _on_response(outcome, _hub=hub):
+            _hub.publish(make_event(RESPONSE_RECEIVED, {
+                "request_id": outcome.request_id,
+                "message_id": outcome.response_message_id,
+                "status": outcome.detail,
+            }))
+            _hub.publish(make_event(REQUEST_UPDATED, {
+                "request_id": outcome.request_id,
+                "status": outcome.detail,
+            }))
+
+        processor = InboundProcessor(
+            state.sessions, agent_id, on_registered=_on_query)
         dispatcher, receive = InboundDispatcher.from_client(
             client, processor)
         receiver = ResponseReceiver(
-            state.sessions, agent_id, provider)
+            state.sessions, agent_id, provider,
+            on_registered=_on_response)
         await receiver.attach(dispatcher)
         task = dispatcher.start(receive)
         state.dispatchers.append((dispatcher, task, receiver))
@@ -233,6 +269,11 @@ async def _open_gateway_io(state: ApiState, settings: ApiSettings) -> None:
 
 async def close_state(state: ApiState) -> None:
     """Release everything in reverse order (idempotent, never raises)."""
+    if state.events is not None:
+        try:
+            state.events.clear()
+        except Exception:  # noqa: BLE001 - shutdown must not fail
+            logger.warning("event hub shutdown failed")
     if state.worker is not None:
         try:
             await state.worker.stop()
@@ -306,6 +347,7 @@ def create_app(
     application.include_router(agents.router, prefix="/api/v1")
     application.include_router(conversations.router, prefix="/api/v1")
     application.include_router(requests.router, prefix="/api/v1")
+    application.include_router(events.router, prefix="/api/v1")
 
     @application.exception_handler(ApiError)
     async def _api_error_handler(

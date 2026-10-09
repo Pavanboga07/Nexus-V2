@@ -77,6 +77,8 @@ Interactive schema: `GET /api/docs` (Swagger UI), raw OpenAPI:
 | `POST /requests/{id}/approve` | Approve as the persisted recipient (`reason` optional) |
 | `POST /requests/{id}/reject` | Reject as the persisted recipient |
 | `POST /requests/{request_id}/execute` | Run the Component 10 executor after its own re-verification; reports `COMPLETED`, `FAILED`, or live-claim `IN_PROGRESS` |
+| `POST /events/ticket` | Spend REST auth for one single-use WebSocket ticket (+ expiry) |
+| `WS /events/ws` | Authenticated event stream (`Sec-WebSocket-Protocol: nexus-ticket.<ticket>` or `?ticket=`; see `docs/WEBSOCKET_EVENTS.md`) |
 
 Chat turns have no idempotency: each `POST` runs one turn. Remote
 `request_id` values are caller-supplied identifiers, not retry keys.

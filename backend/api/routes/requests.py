@@ -13,6 +13,12 @@ from backend.api.errors import (
     ApiError,
     to_api_error,
 )
+from backend.api.events import (
+    EXECUTION_UPDATED,
+    REQUEST_CREATED,
+    REQUEST_UPDATED,
+    make_event,
+)
 from backend.api.schemas import (
     ApprovalAction,
     ExecutionBody,
@@ -85,6 +91,12 @@ async def create_request(
         )
     except RequestServiceError as exc:
         raise to_api_error(exc)
+    deps.state_of(request).events.publish(make_event(REQUEST_CREATED, {
+        "request_id": record.request_id,
+        "sender": record.sender_agent_id,
+        "recipient": record.recipient_agent_id,
+        "status": record.status,
+    }))
     return request_body(record)
 
 
@@ -203,6 +215,10 @@ async def _decide(
             )
     except RequestServiceError as exc:
         raise to_api_error(exc)
+    deps.state_of(request).events.publish(make_event(REQUEST_UPDATED, {
+        "request_id": updated.request_id,
+        "status": updated.status,
+    }))
     return request_body(updated)
 
 
@@ -267,6 +283,18 @@ async def execute_request(
         ).execute(request_id)
     except RequestServiceError as exc:
         raise to_api_error(exc)
+    deps.state_of(request).events.publish(make_event(EXECUTION_UPDATED, {
+        "request_id": outcome.request_id,
+        "status": outcome.status,
+        "executed": outcome.executed,
+        "response_message_id": outcome.response_message_id,
+    }))
+    if outcome.record.status != record.status:
+        deps.state_of(request).events.publish(
+            make_event(REQUEST_UPDATED, {
+                "request_id": outcome.request_id,
+                "status": outcome.record.status,
+            }))
     return ExecutionBody(
         request_id=outcome.request_id,
         status=outcome.status,

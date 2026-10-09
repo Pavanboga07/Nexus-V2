@@ -44,7 +44,12 @@ def _bearer_token(request: Request) -> str | None:
     scheme, _, value = header.partition(" ")
     if scheme.lower() != "bearer" or not value.strip():
         return None
-    return value.strip()
+    token = value.strip()
+    # compare_digest rejects non-ASCII input with TypeError: treat such
+    # headers as absent credentials (401) rather than a server failure.
+    if not token.isascii():
+        return None
+    return token
 
 
 async def authenticate(request: Request) -> ApiSettings:
