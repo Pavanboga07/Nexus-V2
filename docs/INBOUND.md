@@ -13,8 +13,12 @@ transaction) → existing `RequestService.approve()` / `reject()`.
 1. The gateway client's single `recv()` loop stays the only reader;
    DELIVERs land on `client.incoming` unchanged.
 2. `InboundDispatcher` is the single consumer. `REMOTE_QUERY` goes to
-   the processor; every other type is retained in `dispatcher.unhandled`
-   for the future response receiver — never silently discarded.
+   the processor; `REMOTE_RESPONSE` goes to the registered Component
+   11 response handler when one is set
+   (`set_response_handler`, exactly once — a second registration
+   raises `HandlerAlreadyRegistered`); every other type, and
+   responses with no handler, are retained in `dispatcher.unhandled`
+   — never silently discarded.
 3. The processor runs cheap checks first (type, recipient, payload
    policy), then one transaction: load recipient/sender/peer rows,
    verify the signature against the **stored** sender key, classify
@@ -80,9 +84,15 @@ mirroring the outbound write path.
   orphaned tasks.
 - `InboundDispatcher.from_client(client, processor)` binds to a
   GatewayClient without modifying its reader, ACK, or queue rules.
-- `next_unhandled()` yields retained messages for Component 10.
+- `next_unhandled()` yields retained messages for future
+  components; the Component 11 receiver additionally drains retained
+  `REMOTE_RESPONSE` mail when it attaches (re-queuing other types in
+  order), so starting the receiver discards nothing.
 - Unexpected processor failures are logged with ids only (never query
   content or keys) and reported as `REJECTED`; the loop stays alive.
+  Response-handler bugs are contained the same way, except transient
+  infrastructure failures, which retain the response for a later
+  retry instead of losing it.
 
 ## Approval boundary
 
@@ -90,9 +100,11 @@ mirroring the outbound write path.
 recipient-only, one decision, legal transitions only. Approval records
 the decision — it does not execute anything in Component 9.
 
-## Limitations / Component 10 boundary
+## Limitations / Component 11 boundary
 
-- No response receiver: `REMOTE_RESPONSE` is only retained.
+- The response receiver lives in Component 11 (`backend/responses/`,
+  attached via `dispatcher.set_response_handler`); retention alone
+  remains the fallback with no handler.
 - No REST, WebSocket events, or UI; no LLM, LangGraph, or MCP use.
 - No automatic approval, expiry sweeps, or remote response sending.
 - Transport delivery (gateway ACK) is not durable acceptance; only a

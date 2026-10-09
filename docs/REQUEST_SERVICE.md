@@ -110,8 +110,10 @@ parse (must be REMOTE_RESPONSE) → locate request by request_id
 local agent must be the requester; envelope parties must mirror
 the original direction (responder = recipient, audience = sender)
   ↓
-request must be APPROVED or PROCESSING (lag-tolerant, never
-pre-approval, never terminal: no resurrection, ever)
+request must be SENT (durable Gateway-handoff evidence, recorded
+atomically with outbox SENT), or APPROVED/PROCESSING (lag-tolerant);
+never pre-dispatch, never terminal: no resurrection, ever. The
+persisted outbound REMOTE_QUERY message must exist for the request.
   ↓
 verify Ed25519 against the recipient's stored public key
   ↓

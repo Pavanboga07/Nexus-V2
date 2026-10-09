@@ -514,8 +514,14 @@ class RequestService:
         """Correlate, verify, persist, and complete from one response.
 
         Never executes, never dispatches, never notifies: it only moves
-        durable state from PROCESSING (or APPROVED, tolerating status
-        lag on the remote side) to COMPLETED/FAILED.
+        durable state from SENT (or APPROVED/PROCESSING, tolerating
+        status lag on the remote side) to COMPLETED/FAILED. SENT is the
+        originating side's durable dispatch evidence — recorded
+        atomically with the outbox SENT mark on Gateway handoff — so a
+        response for a request that never left QUEUED (or that already
+        rests in a terminal state) is rejected: transport acceptance is
+        never equated with execution, and the verified response itself
+        is what attests downstream progress.
         """
         current = _require_aware(now, "now") if now is not None else _utcnow()
         try:
@@ -549,10 +555,18 @@ class RequestService:
                     f"response sender {message.sender!r} is not the "
                     "requested agent"
                 )
-            if row.status not in (APPROVED, PROCESSING):
+            if row.status not in (SENT, APPROVED, PROCESSING):
                 raise ResponseCorrelationError(
                     f"request {row.request_id!r} in {row.status!r} "
                     "cannot receive a response"
+                )
+            original = await MessageRepository(session).get_by_request_id(
+                row.request_id
+            )
+            if original is None or original.message_type != "REMOTE_QUERY":
+                raise ResponseCorrelationError(
+                    f"request {row.request_id!r} has no persisted "
+                    "outbound query message"
                 )
             responder = await AgentRepository(session).get(
                 row.recipient_agent_id
