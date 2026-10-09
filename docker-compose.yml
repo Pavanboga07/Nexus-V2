@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: nexus_v2_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${NEXUS_DB_NAME:-nexus}
+      POSTGRES_USER: ${NEXUS_DB_USER:-nexus}
+      POSTGRES_PASSWORD: ${NEXUS_DB_PASSWORD:-nexus}
+    ports:
+      - "${NEXUS_DB_PORT:-5432}:5432"
+    volumes:
+      - nexus_v2_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${NEXUS_DB_USER:-nexus}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  nexus_v2_pgdata:

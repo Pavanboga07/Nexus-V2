@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nexus-v2"
+version = "0.8.0"
+description = "Nexus V2: network for independently owned AI agents (protocol + identity + gateway + persistence)"
+requires-python = ">=3.10"
+dependencies = [
+    # Component 2: Ed25519 identity and message authentication.
+    # Pinned exactly: signature bytes must verify identically everywhere.
+    "cryptography==46.0.5",
+    # Component 3: Gateway persistent WebSocket transport.
+    "websockets==16.1.1",
+    # Component 4: PostgreSQL persistence (async SQLAlchemy + Alembic).
+    "SQLAlchemy==2.0.35",
+    "asyncpg==0.29.0",
+    "alembic==1.13.0",
+    # Component 7: local agent runtime (LangGraph orchestration +
+    # LangChain model integrations; provider packages stay optional).
+    "langgraph==1.2.12",
+    "langchain==1.4.4",
+    "langchain-core==1.6.9",
+    # Component 8: MCP integration (LangChain beta adapter + transports).
+    "langchain[mcp]==1.4.4",
+    "fastmcp==4.1.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

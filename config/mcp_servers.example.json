@@ -1,0 +1,17 @@
+{
+  "_comment": "Nexus MCP operator configuration example. No credentials, no production endpoints.",
+  "mcpServers": {
+    "math": {
+      "comment": "Local operator-owned server launched over STDIO.",
+      "transport": "stdio",
+      "command": "python",
+      "args": ["path/to/operator_owned_math_server.py"]
+    },
+    "docs": {
+      "comment": "Remote server over Streamable HTTP (HTTPS required off-loopback).",
+      "transport": "streamable-http",
+      "url": "https://mcp.example.invalid/mcp"
+    }
+  },
+  "allowedTools": ["math_add", "math_multiply"]
+}
