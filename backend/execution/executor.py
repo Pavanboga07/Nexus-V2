@@ -3,7 +3,9 @@
 One ``RemoteExecutor`` serves exactly one local agent id. :meth:`execute`
 takes only a ``request_id`` and re-verifies everything against durable
 state inside the claim transaction: inbound orientation, ``APPROVED``
-status, a recorded recipient approval, live peer trust, and expiry.
+status, a recorded recipient approval, live peer trust, expiry, and
+local signing-identity availability (so a missing key fails before the
+claim, never after side-effecting tools have run).
 The approved query then runs once through the injected real
 :class:`AgentRuntime` (history always empty, so executions never share
 conversations), and the signed ``REMOTE_RESPONSE`` plus outbox record
@@ -88,6 +90,19 @@ from .models import ExecutionOutcome
 #: Static failure codes sent to the requester (never exception text).
 CODE_EXECUTION_FAILED = "EXECUTION_FAILED"
 CODE_REQUEST_EXPIRED = "REQUEST_EXPIRED"
+
+#: Minimum remaining response lifetime (seconds) required to record a
+#: successful ``COMPLETED`` result. The response inherits the request's
+#: ``expires_at`` and must still pass the outbox worker's existing
+#: expiry validation (``validate_message(..., now=...)`` rejects
+#: ``now >= expires_at``) when the next dispatch batch runs under
+#: normal conditions. Ten seconds comfortably covers the worker's
+#: default poll interval (1 s) plus claim/validation overhead without
+#: coupling this component to worker internals, and is negligible
+#: against real request TTLs. A success with less remaining lifetime
+#: takes the existing mid-flight-expiry failure path instead of
+#: committing an undeliverable ``COMPLETED`` result.
+RESPONSE_EXPIRY_MARGIN_S = 10.0
 
 
 def _translate_infrastructure_errors(fn):
@@ -221,6 +236,19 @@ class RemoteExecutor:
             if row.expires_at <= current:
                 expired = True
             else:
+                # Pre-flight signing-identity check (audit H1): the
+                # response must be signed by the local agent, so prove
+                # the key is available BEFORE claiming PROCESSING and
+                # before the Agent Runtime (and any side-effecting MCP
+                # tools) runs. Failure raises inside the claim scope,
+                # which rolls back: the row stays APPROVED (recoverable
+                # once the identity is restored) and nothing executes.
+                try:
+                    self._identities.private_key_for(self._local_agent_id)
+                except KeyError as exc:
+                    raise ExecutionError(
+                        f"no signing identity for {self._local_agent_id!r}"
+                    ) from exc
                 await repo.update(request_id, status=PROCESSING)
                 expired = False
             query = row.query
@@ -307,7 +335,20 @@ class RemoteExecutor:
                 f"request {request_id!r} left processing during execution; "
                 "no response recorded"
             )
-        if failure is None and answer is not None and expires_at > current:
+        # Success requires enough remaining lifetime for the queued
+        # response to pass the outbox worker's expiry validation under
+        # normal dispatch (audit M1): a response expiring at or within
+        # RESPONSE_EXPIRY_MARGIN_S would be committed COMPLETED yet
+        # permanently rejected by the worker, so it takes the existing
+        # mid-flight-expiry failure path instead. Error responses keep
+        # the previous rule: the request already failed truthfully, and
+        # the response only reports that failure.
+        remaining = (expires_at - current).total_seconds()
+        if (
+            failure is None
+            and answer is not None
+            and remaining > RESPONSE_EXPIRY_MARGIN_S
+        ):
             payload = RemoteResponsePayload(status="ok", answer=answer)
             target_status: str = COMPLETED
             failure_code: str | None = None
@@ -323,9 +364,12 @@ class RemoteExecutor:
             target_status = FAILED
             failure_code, failure_message = code, message
         else:
-            # The request expired mid-flight: no valid response envelope
-            # can be built under the inherited-expiry rule, so record
-            # the failure without queueing anything for the requester.
+            # The request expired mid-flight, or a success would expire
+            # before the outbox worker can validate it (remaining
+            # lifetime at or below RESPONSE_EXPIRY_MARGIN_S): no valid,
+            # deliverable response envelope can be built under the
+            # inherited-expiry rule, so record the failure without
+            # queueing anything for the requester.
             updated = await repo.update(
                 request_id,
                 status=FAILED,
