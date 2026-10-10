@@ -27,7 +27,7 @@ export function AiProviderSection() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [provider, setProvider] = useState("google_genai");
-  const [model, setModel] = useState("gemini-2.0-flash");
+  const [model, setModel] = useState("gemini-3.5-flash");
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -45,7 +45,7 @@ export function AiProviderSection() {
       setStatus(loaded);
       if (loaded.configured) {
         setProvider(loaded.provider ?? "google_genai");
-        setModel(loaded.model ?? "gemini-2.0-flash");
+        setModel(loaded.model ?? "gemini-3.5-flash");
       }
     } catch (error) {
       setLoadError(describeError(error));
@@ -155,7 +155,7 @@ export function AiProviderSection() {
         </Field>
         <Field
           label="Model"
-          hint="Provider model id, e.g. gemini-2.0-flash."
+          hint="Provider model id, e.g. gemini-3.5-flash."
         >
           <TextInput
             value={model}

@@ -77,7 +77,7 @@ automatically when its pairing request arrives.
 
 **Option A — real provider through the UI (recommended).** Open the
 frontend, go to Settings → AI Provider: choose Google Gemini, enter
-the model (e.g. `gemini-2.0-flash`) and API key, Save, then Test
+the model (e.g. `gemini-3.5-flash`) and API key, Save, then Test
 connection (one minimal live call). The key is stored encrypted
 (`NEXUS_API_CREDENTIAL_KEY` must be set on the backend, otherwise
 saving fails closed) and is never displayed again. Chat turns and

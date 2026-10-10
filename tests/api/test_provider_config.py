@@ -61,12 +61,12 @@ async def test_save_get_delete_roundtrip_never_returns_key(db):
         saved = await client.put(
             "/api/v1/settings/ai-provider", headers=auth_headers(),
             json={"provider": "google_genai",
-                  "model": "gemini-2.0-flash", "api_key": BOGUS_KEY})
+                  "model": "gemini-3.5-flash", "api_key": BOGUS_KEY})
         assert saved.status_code == 200, saved.text
         body = saved.json()
         assert body["configured"] is True
         assert body["provider"] == "google_genai"
-        assert body["model"] == "gemini-2.0-flash"
+        assert body["model"] == "gemini-3.5-flash"
         assert "api_key" not in body
         assert BOGUS_KEY not in saved.text
         assert "updated_at" in body
@@ -103,7 +103,7 @@ async def test_save_rejects_unknown_provider_and_blank_key(db):
         blank_key = await client.put(
             "/api/v1/settings/ai-provider", headers=auth_headers(),
             json={"provider": "google_genai",
-                  "model": "gemini-2.0-flash", "api_key": "   "})
+                  "model": "gemini-3.5-flash", "api_key": "   "})
         assert blank_key.status_code == 422, blank_key.text
 
 
@@ -118,7 +118,7 @@ async def test_save_without_master_key_fails_closed(db):
         response = await client.put(
             "/api/v1/settings/ai-provider", headers=auth_headers(),
             json={"provider": "google_genai",
-                  "model": "gemini-2.0-flash", "api_key": BOGUS_KEY})
+                  "model": "gemini-3.5-flash", "api_key": BOGUS_KEY})
     assert response.status_code == 503, response.text
     assert response.json()["code"] == "CREDENTIAL_STORE_UNAVAILABLE"
 
@@ -141,7 +141,7 @@ async def test_stored_key_is_ciphertext_in_database(db):
         saved = await client.put(
             "/api/v1/settings/ai-provider", headers=auth_headers(),
             json={"provider": "google_genai",
-                  "model": "gemini-2.0-flash", "api_key": BOGUS_KEY})
+                  "model": "gemini-3.5-flash", "api_key": BOGUS_KEY})
         assert saved.status_code == 200, saved.text
     async with session_scope(db.sessions) as session:
         row = await ProviderCredentialRepository(session).get(OWNER)
@@ -162,7 +162,7 @@ async def test_live_call_with_bogus_key_fails_usefully(db):
         response = await client.post(
             "/api/v1/settings/ai-provider/test", headers=auth_headers(),
             json={"provider": "google_genai",
-                  "model": "gemini-2.0-flash", "api_key": BOGUS_KEY})
+                  "model": "gemini-3.5-flash", "api_key": BOGUS_KEY})
     assert response.status_code in (401, 502, 503), response.text
     body = response.json()
     assert body["code"] in (
@@ -196,12 +196,12 @@ async def test_candidate_success_path_with_stubbed_model(db, monkeypatch):
         response = await client.post(
             "/api/v1/settings/ai-provider/test", headers=auth_headers(),
             json={"provider": "google_genai",
-                  "model": "gemini-2.0-flash", "api_key": BOGUS_KEY})
+                  "model": "gemini-3.5-flash", "api_key": BOGUS_KEY})
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["ok"] is True
     assert body["provider"] == "google_genai"
-    assert body["model"] == "gemini-2.0-flash"
+    assert body["model"] == "gemini-3.5-flash"
     assert "OK" in body["reply_preview"]
     assert BOGUS_KEY not in response.text
 
@@ -234,14 +234,14 @@ async def test_test_saved_uses_stored_config(db, monkeypatch):
         saved = await client.put(
             "/api/v1/settings/ai-provider", headers=auth_headers(),
             json={"provider": "google_genai",
-                  "model": "gemini-2.0-flash", "api_key": BOGUS_KEY})
+                  "model": "gemini-3.5-flash", "api_key": BOGUS_KEY})
         assert saved.status_code == 200, saved.text
         response = await client.post(
             "/api/v1/settings/ai-provider/test", headers=auth_headers(),
             json={})
     assert response.status_code == 200, response.text
     assert seen == {"provider": "google_genai",
-                    "model": "gemini-2.0-flash", "api_key": BOGUS_KEY}
+                    "model": "gemini-3.5-flash", "api_key": BOGUS_KEY}
 
 
 def test_supported_providers_lists_gemini_first():

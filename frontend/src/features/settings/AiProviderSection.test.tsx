@@ -13,7 +13,7 @@ describe("AiProviderSection", () => {
         body: {
           configured: true,
           provider: "google_genai",
-          model: "gemini-2.0-flash",
+          model: "gemini-3.5-flash",
           updated_at: "2026-10-10T00:00:00Z",
         },
       },
@@ -35,7 +35,7 @@ describe("AiProviderSection", () => {
     const put = calls.find((call) => call.method === "PUT");
     expect(put?.body).toMatchObject({
       provider: "google_genai",
-      model: "gemini-2.0-flash",
+      model: "gemini-3.5-flash",
       api_key: "test-key-123",
     });
     // Key field cleared after save; status shows configured metadata.
@@ -57,7 +57,7 @@ describe("AiProviderSection", () => {
         body: {
           configured: true,
           provider: "google_genai",
-          model: "gemini-2.0-flash",
+          model: "gemini-3.5-flash",
           updated_at: "2026-10-10T00:00:00Z",
         },
       },
@@ -65,7 +65,7 @@ describe("AiProviderSection", () => {
         body: {
           ok: true,
           provider: "google_genai",
-          model: "gemini-2.0-flash",
+          model: "gemini-3.5-flash",
           latency_ms: 412,
           reply_preview: "OK",
         },
@@ -104,7 +104,7 @@ describe("AiProviderSection", () => {
         body: {
           configured: true,
           provider: "google_genai",
-          model: "gemini-2.0-flash",
+          model: "gemini-3.5-flash",
           updated_at: "2026-10-10T00:00:00Z",
         },
       },
