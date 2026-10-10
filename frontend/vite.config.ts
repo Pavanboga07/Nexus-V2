@@ -6,13 +6,20 @@ import tailwindcss from "@tailwindcss/vite";
 // directly, so the backend's (absent) CORS config and its WebSocket
 // origin policy see ordinary same-origin traffic. The proxy forwards
 // the original Host, keeping the origin check meaningful.
+//
+// NEXUS_DEV_API overrides the target so two frontends can drive two
+// independent backends side by side during the A2A demo, e.g.
+// NEXUS_DEV_API=http://127.0.0.1:8002 npm run dev -- --port 5174
+const apiTarget =
+  process.env.NEXUS_DEV_API ?? "http://127.0.0.1:8000";
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8000",
+        target: apiTarget,
         changeOrigin: false,
         ws: true,
       },
@@ -22,7 +29,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8000",
+        target: apiTarget,
         changeOrigin: false,
         ws: true,
       },

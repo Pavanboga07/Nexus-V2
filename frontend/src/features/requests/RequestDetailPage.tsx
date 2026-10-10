@@ -3,8 +3,9 @@ import { Link, useParams } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { useAuth } from "../../lib/auth/AuthProvider";
 import { describeError } from "../../lib/api/client";
-import { executeRequest } from "../../lib/api/endpoints";
+import { completePairing, executeRequest } from "../../lib/api/endpoints";
 import { useRequestDetail } from "./useRequests";
+import { isPairingRequest } from "./RequestRow";
 import { canExecute, formatTime, statusLabel, statusTone } from "./status";
 import { Button } from "../../components/ui/Button";
 import { EmptyState, ErrorState, Skeleton, Spinner, StatusBadge } from "../../components/ui/Feedback";
@@ -21,7 +22,29 @@ export function RequestDetailPage() {
   const { notify } = useToast();
   const [executing, setExecuting] = useState(false);
   const [executeError, setExecuteError] = useState<string | null>(null);
+  const [completing, setCompleting] = useState(false);
+  const [completeError, setCompleteError] = useState<string | null>(null);
+  const [completedPairing, setCompletedPairing] = useState<string | null>(null);
 
+  const completePairingFlow = async () => {
+    if (completing || !detail.item) return;
+    setCompleting(true);
+    setCompleteError(null);
+    try {
+      const outcome = await completePairing(
+        baseUrl, token, detail.item.request_id);
+      detail.reload();
+      setCompletedPairing(
+        outcome.approved
+          ? `Pairing completed (${outcome.ack}). The peer is now connected.`
+          : "Rejection notice sent to the initiator.",
+      );
+    } catch (error) {
+      setCompleteError(describeError(error));
+    } finally {
+      setCompleting(false);
+    }
+  };
   const retryExecution = async () => {
     if (executing || !detail.item || !canExecute(detail.item.status)) return;
     setExecuting(true);
@@ -154,6 +177,29 @@ export function RequestDetailPage() {
               <div>
                 <Button variant="primary" size="sm" onClick={() => void retryExecution()} busy={executing}>
                   {executing ? <Spinner label="Executing" /> : "Retry execution"}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {isPairingRequest(detail.item) &&
+          (detail.item.status === "APPROVED" || detail.item.status === "REJECTED") ? (
+            <div className="flex flex-col gap-2 border-t border-graphite-800 pt-4">
+              <p className="text-sm text-ink-300">
+                Pairing {detail.item.status === "APPROVED" ? "approved" : "rejected"}.
+                Complete it to {detail.item.status === "APPROVED"
+                  ? "connect the peer and notify the initiator with a signed acceptance"
+                  : "notify the initiator of the rejection"}. Safe to retry.
+              </p>
+              {completeError ? (
+                <p role="alert" className="text-sm text-signal-red">{completeError}</p>
+              ) : null}
+              {completedPairing ? (
+                <p role="status" className="text-sm text-signal-green">{completedPairing}</p>
+              ) : null}
+              <div>
+                <Button variant="primary" size="sm" onClick={() => void completePairingFlow()} busy={completing}>
+                  {completing ? <Spinner label="Completing" /> : "Complete pairing"}
                 </Button>
               </div>
             </div>

@@ -1,8 +1,15 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
+import { useAuth } from "../../lib/auth/AuthProvider";
+import { describeError } from "../../lib/api/client";
+import { revokePeer } from "../../lib/api/endpoints";
 import { useNetwork } from "./useNetwork";
+import { ConnectAgentPanel } from "./ConnectAgentPanel";
+import { Button } from "../../components/ui/Button";
 import { EmptyState, ErrorState, Skeleton } from "../../components/ui/Feedback";
 import { PageHeader } from "../../components/ui/PageHeader";
+import { useToast } from "../../components/ui/Toast";
 
 function shortKey(publicKey: string): string {
   if (publicKey.length <= 24) return publicKey;
@@ -10,10 +17,33 @@ function shortKey(publicKey: string): string {
 }
 
 /** Local agents and their known remote peers, from live API data.
- *  The backend exposes no connect/disconnect operation, so none is
- *  shown; availability is reported honestly instead. */
+ *  Pairing (invitations + acceptance) is the only way peers are added
+ *  through the UI; revoking removes local authorization immediately. */
 export function AgentsPage() {
   const network = useNetwork();
+  const { baseUrl, token } = useAuth();
+  const { notify } = useToast();
+  const [revoking, setRevoking] = useState<string | null>(null);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
+
+  const onRevokePeer = async (peerAgentId: string) => {
+    setRevoking(peerAgentId);
+    setRevokeError(null);
+    try {
+      const result = await revokePeer(baseUrl, token, peerAgentId);
+      notify(
+        result.revoked > 0
+          ? `Authorization for ${peerAgentId} revoked.`
+          : `${peerAgentId} was not authorized here.`,
+        "info",
+      );
+      network.reload();
+    } catch (caught) {
+      setRevokeError(describeError(caught));
+    } finally {
+      setRevoking(null);
+    }
+  };
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
@@ -21,6 +51,13 @@ export function AgentsPage() {
         title="Agents"
         subtitle="Your local agents and the remote peers they know about."
       />
+      <ConnectAgentPanel
+        agents={network.agents}
+        onChanged={network.reload}
+      />
+      {revokeError ? (
+        <p role="alert" className="mb-4 text-sm text-signal-red">{revokeError}</p>
+      ) : null}
       {network.networkState === "loading" ? (
         <div className="flex flex-col gap-3" role="status">
           <span className="sr-only">Loading agents</span>
@@ -97,7 +134,20 @@ export function AgentsPage() {
                     <span className="truncate font-mono text-ink-100">
                       {peer.peer_agent_id}
                     </span>
-                    <span className="shrink-0 text-xs text-ink-500">{peer.status}</span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      <span className="text-xs text-ink-500">{peer.status}</span>
+                      {peer.status !== "revoked" ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          busy={revoking === peer.peer_agent_id}
+                          onClick={() => void onRevokePeer(peer.peer_agent_id)}
+                          aria-label={`Revoke authorization for ${peer.peer_agent_id}`}
+                        >
+                          Revoke
+                        </Button>
+                      ) : null}
+                    </span>
                   </li>
                 ))}
               </ul>

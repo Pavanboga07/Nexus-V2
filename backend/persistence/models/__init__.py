@@ -30,7 +30,9 @@ from .audit_event import AuditEvent  # noqa: E402
 from .conversation import Conversation, ConversationMessage  # noqa: E402
 from .message import ProtocolMessage  # noqa: E402
 from .outbox import OutboxMessage  # noqa: E402
+from .pairing import PairInvitation, PairLink  # noqa: E402
 from .peer import AgentPeer  # noqa: E402
+from .provider_credential import ProviderCredential  # noqa: E402
 from .remote_request import RemoteRequest  # noqa: E402
 from .user import User  # noqa: E402
 
@@ -46,4 +48,7 @@ __all__ = [
     "Conversation",
     "ConversationMessage",
     "AuditEvent",
+    "ProviderCredential",
+    "PairInvitation",
+    "PairLink",
 ]

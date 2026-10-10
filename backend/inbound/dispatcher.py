@@ -85,6 +85,9 @@ class InboundDispatcher:
         # The single Component 11 response handler (None until
         # :meth:`set_response_handler` registers exactly one).
         self._response_handler: Any | None = None
+        # The single pairing acceptance handler (None until
+        # :meth:`set_pairing_handler` registers exactly one).
+        self._pairing_handler: Any | None = None
 
     def set_response_handler(self, handler: Any) -> None:
         """Register the sole REMOTE_RESPONSE handler (Component 11).
@@ -110,6 +113,30 @@ class InboundDispatcher:
         """
         if handler is None or self._response_handler is handler:
             self._response_handler = None
+
+    def set_pairing_handler(self, handler: Any) -> None:
+        """Register the sole APPROVAL_RESPONSE handler (pairing).
+
+        Raises :class:`HandlerAlreadyRegistered` if a handler is
+        already registered: two handlers would split acceptances.
+        Use :meth:`clear_pairing_handler` to stop cleanly first.
+        """
+        if self._pairing_handler is not None:
+            raise HandlerAlreadyRegistered(
+                "a pairing handler is already registered"
+            )
+        self._pairing_handler = handler
+
+    def clear_pairing_handler(self, handler: Any | None = None) -> None:
+        """Unregister the pairing handler and stop routing to it.
+
+        When ``handler`` is given, only clears if it is the
+        registered one, so a replacement's registration is never
+        stolen. Acceptances arriving afterwards are retained in
+        :attr:`unhandled`.
+        """
+        if handler is None or self._pairing_handler is handler:
+            self._pairing_handler = None
 
     @property
     def processor(self) -> InboundProcessor:
@@ -190,6 +217,11 @@ class InboundDispatcher:
             and self._response_handler is not None
         ):
             return await self._dispatch_response(message)
+        if (
+            message.type is MessageType.APPROVAL_RESPONSE
+            and self._pairing_handler is not None
+        ):
+            return await self._dispatch_pairing(message)
         # Retained, never dropped: the future response receiver (and
         # any later handler) consumes this queue. Blocking put applies
         # backpressure instead of losing application messages.
@@ -271,6 +303,51 @@ class InboundDispatcher:
         )
         return DispatchResult(
             REJECTED, message.message_id, message.request_id, detail,
+        )
+
+    async def _dispatch_pairing(self, message: NexusMessage) -> DispatchResult:
+        """Route one acceptance to the registered handler (never dies).
+
+        The handler returns a short outcome string (``completed``,
+        ``rejected``, ``ignored-*``); all report ``HANDLED`` since
+        pairing outcomes are terminal and idempotent. A transient
+        infrastructure failure retains the message for a later retry;
+        any other handler bug is logged and reported while the
+        consumer loop stays alive. Cancellation always propagates.
+        """
+        assert self._pairing_handler is not None
+        try:
+            detail = await self._pairing_handler(message)
+        except asyncio.CancelledError:
+            raise
+        except RetryableInfrastructureError as exc:
+            logger.warning(
+                "inbound pairing %s retained after %s",
+                message.message_id,
+                type(exc).__name__,
+            )
+            await self.unhandled.put(message)
+            return DispatchResult(
+                REJECTED,
+                message.message_id,
+                message.request_id,
+                "retained-for-retry",
+            )
+        except Exception as exc:  # noqa: BLE001 - loop stays alive
+            logger.error(
+                "inbound pairing %s failed unexpectedly: %s",
+                message.message_id,
+                type(exc).__name__,
+            )
+            return DispatchResult(
+                REJECTED,
+                message.message_id,
+                message.request_id,
+                type(exc).__name__,
+            )
+        return DispatchResult(
+            HANDLED, message.message_id, message.request_id,
+            str(detail or "pairing-consumed"),
         )
 
     async def run(

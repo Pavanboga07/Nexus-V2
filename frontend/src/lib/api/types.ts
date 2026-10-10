@@ -80,6 +80,61 @@ export interface Ticket {
   expires_at: string;
 }
 
+export interface ProviderStatus {
+  configured: boolean;
+  provider: string | null;
+  model: string | null;
+  updated_at: string | null;
+}
+
+export interface ProviderTestResult {
+  ok: boolean;
+  provider: string;
+  model: string;
+  latency_ms: number;
+  reply_preview: string;
+}
+
+export interface InvitationCreated {
+  invitation_id: string;
+  invitation: string;
+  secret: string;
+  expires_at: string;
+}
+
+export interface InvitationRow {
+  invitation_id: string;
+  issuer_agent_id: string;
+  expires_at: string;
+  used: boolean;
+  revoked: boolean;
+}
+
+export interface InvitationInfo {
+  agent_id: string;
+  public_key: string;
+  fingerprint: string;
+  expires_at: string;
+}
+
+export type PairingStatus = "pending" | "completed" | "rejected" | "expired";
+
+export interface Pairing {
+  pairing_id: string;
+  local_agent_id: string;
+  remote_agent_id: string;
+  status: PairingStatus;
+  invitation_id: string | null;
+  request_id: string | null;
+}
+
+export interface PairingCompletion {
+  pairing_id: string;
+  approved: boolean;
+  message_id: string;
+  ack: string;
+}
+
 export interface ApiErrorBody {
   code: string;
   message: string;
@@ -100,6 +155,7 @@ export const EVENT_TYPES = [
   "remote.response.received",
   "remote.request.updated",
   "execution.updated",
+  "remote.pairing.updated",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

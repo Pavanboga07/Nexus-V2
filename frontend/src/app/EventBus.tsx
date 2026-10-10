@@ -26,6 +26,7 @@ const scopeForType: Record<string, SyncScope[]> = {
   "remote.response.received": ["requests"],
   "remote.request.updated": ["requests", "approvals"],
   "execution.updated": ["requests", "approvals"],
+  "remote.pairing.updated": ["requests", "approvals", "agents"],
 };
 
 /** Owns the authenticated event stream for the whole app. Events fan out

@@ -111,4 +111,58 @@ describe("ChatPage", () => {
     expect(await screen.findByText(/no language model is configured/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^retry$/i })).toBeInTheDocument();
   });
+
+  it("sends a remote request from the panel without touching the chat draft", async () => {
+    seedAuth();
+    const { calls } = stubFetch({
+      "GET /api/v1/agents": { body: AGENTS },
+      "GET /api/v1/agents/local-1/peers": {
+        body: [{ peer_agent_id: "remote-1", status: "connected" }],
+      },
+      "GET /api/v1/conversations": { body: [conversation("conv-1")] },
+      "GET /api/v1/conversations/conv-1/messages": { body: [] },
+      "POST /api/v1/requests": {
+        status: 201,
+        body: { request_id: "req-panel-1", status: "QUEUED" },
+      },
+    });
+    const user = userEvent.setup();
+    renderChat("/chats/conv-1");
+    await user.click(screen.getByRole("button", { name: /ask a connected agent/i }));
+
+    // The panel's Send button must belong to the panel's own form, not
+    // the surrounding chat form: nested forms silently misroute the
+    // submit (an enabled Send that fires nothing).
+    const send = await screen.findByRole("button", { name: /send request/i });
+    const owningForm = send.closest("form");
+    expect(owningForm).not.toBeNull();
+    expect(owningForm!.querySelector("textarea")).toHaveAttribute(
+      "placeholder", "Describe the task for the remote agent");
+    expect(owningForm!.textContent).not.toMatch(/message your assistant/i);
+
+    await user.selectOptions(
+      screen.getByLabelText(/connected agent/i), "remote-1");
+    await user.type(
+      screen.getByPlaceholderText(/describe the task/i), "Do the thing");
+    await user.click(send);
+    await waitFor(() => {
+      const posts = calls.filter(
+        (call) => call.method === "POST" && call.url.endsWith("/api/v1/requests"));
+      expect(posts).toHaveLength(1);
+    });
+    const post = calls.find(
+      (call) => call.method === "POST" && call.url.endsWith("/api/v1/requests"));
+    expect(post?.body).toEqual({
+      sender_agent_id: "local-1",
+      recipient_agent_id: "remote-1",
+      query: "Do the thing",
+    });
+    // No local turn fires as a side effect of the remote send.
+    expect(calls.some((call) => call.url.includes("/turns"))).toBe(false);
+    await waitFor(() => {
+      const confirmations = screen.getAllByRole("status");
+      expect(confirmations.some((node) =>
+        node.textContent?.includes("req-panel-1"))).toBe(true);
+    });
+  });
 });

@@ -99,7 +99,10 @@ export function RemoteRequestPanel({ onCollapse }: { onCollapse: () => void }) {
   }, [recipientId, query]);
 
   const sender = agents.find((agent) => agent.agent_id === senderId) ?? agents[0];
-  const recipientOptions = sender?.peers ?? [];
+  // Only connected peers are eligible: pending peers have not
+  // completed mutual pairing, revoked ones lost authorization.
+  const recipientOptions = (sender?.peers ?? []).filter(
+    (peer) => peer.status === "connected");
   const recipientKnown = recipientOptions.some((peer) => peer.peer_agent_id === recipientId);
 
   const onSubmit = async (event: FormEvent) => {
@@ -144,12 +147,13 @@ export function RemoteRequestPanel({ onCollapse }: { onCollapse: () => void }) {
     return (
       <div className="flex flex-col gap-2 text-sm">
         <p className="text-ink-300">
-          No connected agent is available right now. Remote requests need a
-          local agent with at least one known peer.
+          No connected agent is available right now. Remote requests need
+          a completed pairing — pending or revoked peers cannot receive
+          work.
         </p>
         <div>
           <Link to="/agents" className="font-medium text-accent-300 hover:text-accent-400">
-            View agents
+            Pair an agent first
           </Link>
         </div>
         <div>

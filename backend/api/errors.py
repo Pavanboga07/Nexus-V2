@@ -82,6 +82,20 @@ def _build() -> None:
         UnknownAgentError,
         UnknownRequestError,
     )
+    from backend.pairing.errors import (
+        PairingConflictError,
+        PairingInvalidError,
+        PairingNotFoundError,
+        PairingTransportError,
+    )
+    from backend.provider_config.errors import (
+        CredentialNotConfigured,
+        CredentialStoreUnavailable,
+        ProviderAuthError,
+        ProviderCallError,
+        ProviderConfigInvalid,
+        ProviderUnavailableError,
+    )
     from backend.responses.errors import ResponseReceiverError
 
     validation = (422, "INVALID_INPUT", "request input is invalid")
@@ -90,6 +104,7 @@ def _build() -> None:
         AgentInvalidInput,
         InboundError,
         ResponseReceiverError,
+        ProviderConfigInvalid,
     ):
         _register(error, validation)
     _register(ApprovalError, (422, "APPROVAL_REJECTED",
@@ -128,6 +143,25 @@ def _build() -> None:
                                       "request left its expected state"))
     _register(ExecutionError, (422, "EXECUTION_FAILED",
                               "remote execution failed"))
+    _register(CredentialStoreUnavailable, (503, "CREDENTIAL_STORE_UNAVAILABLE",
+        "provider credential storage is not configured on this deployment"))
+    _register(CredentialNotConfigured, (404, "PROVIDER_NOT_CONFIGURED",
+                                      "no provider configuration is saved"))
+    _register(ProviderAuthError, (401, "PROVIDER_UNAUTHORIZED",
+                                 "the provider rejected the credentials"))
+    _register(ProviderUnavailableError, (503, "PROVIDER_UNAVAILABLE",
+                                       "the provider could not be reached"))
+    _register(ProviderCallError, (502, "PROVIDER_BAD_RESPONSE",
+                                 "the provider returned no usable response"))
+    _register(PairingInvalidError, (422, "PAIRING_REJECTED",
+                                      "the pairing material is invalid"))
+    _register(PairingNotFoundError, (404, "PAIRING_NOT_FOUND",
+                                    "pairing invitation or link not found"))
+    _register(PairingConflictError, (409, "PAIRING_CONFLICT",
+                                    "pairing state forbids this action"))
+    _register(PairingTransportError, (503, "PAIRING_TRANSPORT",
+                                     "the pairing message could not be "
+                                     "delivered; it is safe to retry"))
     _register(ModelInvocationError, (503, "MODEL_UNAVAILABLE",
                                     "model invocation failed"))
     retryable = (503, "UPSTREAM_UNAVAILABLE",
