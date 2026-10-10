@@ -9,6 +9,7 @@ from .dispatcher import (
     InboundDispatcher,
 )
 from .errors import (
+    HandlerAlreadyRegistered,
     InboundConflictingDuplicate,
     InboundError,
     InboundExpired,
@@ -38,6 +39,7 @@ __all__ = [
     "UNHANDLED",
     "DispatchResult",
     "DispatcherAlreadyRunning",
+    "HandlerAlreadyRegistered",
     "InboundConflictingDuplicate",
     "InboundDispatcher",
     "InboundError",

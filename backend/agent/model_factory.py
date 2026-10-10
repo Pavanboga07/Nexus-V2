@@ -50,6 +50,16 @@ def build_chat_model(config: AgentRuntimeConfig) -> BaseChatModel:
             "'provider:model-id' (e.g. 'openai:gpt-4o')"
         )
     provider, model_id = parse_model_ref(config.model)
+    if provider == "deterministic":
+        if not config.allow_deterministic:
+            raise ModelConfigurationError(
+                "deterministic models are development-only: set "
+                "NEXUS_LLM_ALLOW_DETERMINISTIC=1 alongside "
+                "NEXUS_LLM_MODEL='deterministic:<label>' to opt in"
+            )
+        from .deterministic import DeterministicModel
+
+        return DeterministicModel(label=model_id)
     try:
         from langchain.chat_models import init_chat_model
     except ImportError as exc:

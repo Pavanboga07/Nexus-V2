@@ -10,6 +10,7 @@ from .errors import (
     ConnectionLostError,
     GatewayClientError,
     HandshakeFailedError,
+    MessageTooLargeError,
     NotConnectedError,
 )
 from .models import AckResult, ClientConfig, ConnectionState
@@ -24,4 +25,5 @@ __all__ = [
     "NotConnectedError",
     "AckTimeoutError",
     "ConnectionLostError",
+    "MessageTooLargeError",
 ]

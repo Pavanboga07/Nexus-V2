@@ -32,6 +32,11 @@ class AgentRuntimeConfig:
     max_history_messages: int = 20
     max_tool_result_chars: int = 8000
     system_instruction: str = DEFAULT_SYSTEM_INSTRUCTION
+    # Explicit opt-in for the deterministic development model
+    # (``NEXUS_LLM_MODEL='deterministic:<label>'``). Never enabled
+    # implicitly: production deployments without credentials must fail
+    # loudly rather than silently use a fake model.
+    allow_deterministic: bool = False
 
     def __post_init__(self) -> None:
         """Reject out-of-range operational settings immediately."""
@@ -97,6 +102,7 @@ class AgentRuntimeConfig:
         timeout = optional_float("TIMEOUT_S")
         max_input = optional_int("MAX_INPUT_CHARS")
         max_history = optional_int("MAX_HISTORY")
+        allow_raw = (env.get(prefix + "ALLOW_DETERMINISTIC") or "").lower()
         return cls(
             model=model,
             temperature=optional_float("TEMPERATURE"),
@@ -105,6 +111,7 @@ class AgentRuntimeConfig:
             **({"max_input_chars": max_input} if max_input is not None else {}),
             **({"max_history_messages": max_history}
                if max_history is not None else {}),
+            allow_deterministic=allow_raw in ("1", "true", "yes", "on"),
             system_instruction=(
                 env.get(prefix + "SYSTEM_INSTRUCTION")
                 or DEFAULT_SYSTEM_INSTRUCTION

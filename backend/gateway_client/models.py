@@ -26,6 +26,11 @@ class ClientConfig:
     # Must exceed the server's max frame: legitimately large DELIVER
     # frames would otherwise trip the client's own receive limit.
     max_frame_size: int = 4 * 1024 * 1024
+    # Sender-side envelope cap (canonical UTF-8 bytes, same measure the
+    # gateway enforces). Must not exceed the gateway's max_message_size
+    # (default 1 MiB): anything larger is rejected here, before any
+    # bytes move, instead of failing at the server or mid-transmission.
+    max_send_size: int = 1_048_576
 
 
 @dataclass(frozen=True)

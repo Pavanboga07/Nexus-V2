@@ -50,10 +50,12 @@ loudly instead of hanging them.
 - `RETRYABLE` — a failure provably before transmission (refused
   connection, failed handshake, rate/buffer pressure): back to
   `PENDING` with bounded backoff, identifiers untouched.
-- `PERMANENT` — provably undispatchable (malformed/invalid/expired
-  message, bad signature, missing identity, definitive Gateway
-  rejection): outbox `FAILED`, request moved to `FAILED`/terminal via
-  existing service rules. Never retried.
+- `PERMANENT` — provably undispatchable (malformed/invalid/expired/
+  oversized message, bad signature, missing identity, definitive
+  Gateway rejection): outbox `FAILED`, request moved to `FAILED`/
+  terminal via existing service rules. Never retried. An oversized
+  message is rejected by the client before transmission (no byte
+  moves), so it lands here rather than as an ambiguous send.
 - `UNCERTAIN` — transmission may have occurred but nothing proves the
   outcome (ack timeout, mid-send connection loss, unknown rejection
   codes, signature replay of an already-consumed id, unexpected bugs).

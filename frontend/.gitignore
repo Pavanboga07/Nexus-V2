@@ -1,0 +1,10 @@
+# Frontend-local ignores (dev credentials for E2E, build output).
+.keys.json
+test-results/
+playwright-report/
+node_modules/
+dist/
+# src/lib is application source, not a build artifact: re-include it
+# (the repository root ignores bare `lib/` directories).
+!src/lib/
+!src/lib/**

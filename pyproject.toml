@@ -2,6 +2,18 @@
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.packages.find]
+# Explicit discovery (flat layout, namespace packages): the installable
+# payload is the ``backend`` namespace only. ``backend.identity`` and
+# ``backend.protocol`` are stdlib-plus-cryptography, so downstream
+# consumers (e.g. the standalone Gateway) can install this
+# distribution with ``--no-deps`` and import just those two modules
+# without the LangGraph/MCP/persistence stack, which nothing outside
+# the application itself imports.
+where = ["."]
+include = ["backend*"]
+namespaces = true
+
 [project]
 name = "nexus-v2"
 version = "0.8.0"
@@ -25,11 +37,18 @@ dependencies = [
     # Component 8: MCP integration (LangChain beta adapter + transports).
     "langchain[mcp]==1.4.4",
     "fastmcp==4.1.0",
+    # Component 12: REST API (FastAPI over Starlette; uvicorn serves it).
+    # FastAPI must stay compatible with the installed Starlette major
+    # line (0.115.x predates it and cannot construct a router).
+    "fastapi==0.143.0",
+    "uvicorn==0.54.0",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest>=8",
+    "pytest-asyncio==0.24.0",
+    "httpx==0.27.2",
 ]
 
 [tool.pytest.ini_options]

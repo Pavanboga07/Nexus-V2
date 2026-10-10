@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import binascii
 import functools
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -78,6 +79,8 @@ from .models import DUPLICATE, REGISTERED, InboundOutcome
 #: Audit fact appended when a request is first registered.
 EVENT_REGISTERED = "inbound_request_registered"
 
+logger = logging.getLogger("nexus.inbound")
+
 
 def _translate_infrastructure_errors(fn):
     """Map connectivity-level failures to a retryable typed error.
@@ -122,6 +125,7 @@ class InboundProcessor:
         sessions: async_sessionmaker[AsyncSession],
         local_agent_id: str,
         replay_registry: Any | None = None,
+        on_registered: Any | None = None,
     ) -> None:
         """Bind the processor to one local agent id.
 
@@ -130,10 +134,17 @@ class InboundProcessor:
         crash before commit can never poison a legitimate retry. It is
         never consulted to accept or reject; the messages table is the
         durable replay record and survives restarts.
+
+        ``on_registered`` is an optional synchronous callback invoked
+        with the signed message exactly once per first registration
+        (never for duplicates, never before commit). Callback failures
+        are logged and swallowed: they must never undo or obscure the
+        committed outcome.
         """
         self._sessions = sessions
         self._local_agent_id = local_agent_id
         self._replay = replay_registry
+        self._on_registered = on_registered
 
     @property
     def local_agent_id(self) -> str:
@@ -163,6 +174,14 @@ class InboundProcessor:
                 self._replay.record(message.message_id, message.expires_at)
             except Exception:  # noqa: BLE001 - advisory only, never fails
                 pass
+        if outcome.status == REGISTERED and self._on_registered is not None:
+            try:
+                self._on_registered(message)
+            except Exception:  # noqa: BLE001 - notify only, never fails
+                logger.warning(
+                    "inbound registration callback failed for %s",
+                    message.message_id,
+                )
         return outcome
 
     # -- validation ------------------------------------------------------

@@ -17,9 +17,11 @@ from typing import Any, Awaitable, Callable
 
 from backend.protocol.models import NexusMessage
 from backend.protocol.types import MessageType
+from backend.requests.errors import RetryableInfrastructureError
+from backend.responses.models import DUPLICATE, REGISTERED
 
-from .errors import InboundError
-from .models import DUPLICATE, REGISTERED, InboundOutcome
+from .errors import HandlerAlreadyRegistered, InboundError
+from .models import InboundOutcome
 from .processor import InboundProcessor
 
 logger = logging.getLogger("nexus.inbound")
@@ -80,6 +82,34 @@ class InboundDispatcher:
         # :meth:`from_client` (None for a raw queue source, where no
         # ownership can be identified or enforced).
         self._client: Any | None = None
+        # The single Component 11 response handler (None until
+        # :meth:`set_response_handler` registers exactly one).
+        self._response_handler: Any | None = None
+
+    def set_response_handler(self, handler: Any) -> None:
+        """Register the sole REMOTE_RESPONSE handler (Component 11).
+
+        Raises :class:`HandlerAlreadyRegistered` if a handler is
+        already registered: two handlers would split responses and
+        break exactly-once accounting. Use
+        :meth:`clear_response_handler` to stop cleanly first.
+        """
+        if self._response_handler is not None:
+            raise HandlerAlreadyRegistered(
+                "a response handler is already registered"
+            )
+        self._response_handler = handler
+
+    def clear_response_handler(self, handler: Any | None = None) -> None:
+        """Unregister the response handler and stop routing to it.
+
+        When ``handler`` is given, only clears if it is the
+        registered one, so a replacement's registration is never
+        stolen. Responses arriving afterwards are retained in
+        :attr:`unhandled` exactly as before Component 11.
+        """
+        if handler is None or self._response_handler is handler:
+            self._response_handler = None
 
     @property
     def processor(self) -> InboundProcessor:
@@ -155,6 +185,11 @@ class InboundDispatcher:
                 message.request_id,
                 outcome.status,
             )
+        if (
+            message.type is MessageType.REMOTE_RESPONSE
+            and self._response_handler is not None
+        ):
+            return await self._dispatch_response(message)
         # Retained, never dropped: the future response receiver (and
         # any later handler) consumes this queue. Blocking put applies
         # backpressure instead of losing application messages.
@@ -178,6 +213,65 @@ class InboundDispatcher:
     async def next_unhandled(self) -> NexusMessage:
         """Yield the next retained message (future response receiver)."""
         return await self.unhandled.get()
+
+    async def _dispatch_response(self, message: NexusMessage) -> DispatchResult:
+        """Route one response to the registered handler (never dies).
+
+        ``REGISTERED``/``DUPLICATE`` outcomes report ``HANDLED``: the
+        response is durably settled either way. ``REJECTED`` reports
+        the rejecting reason. A transient infrastructure failure
+        retains the message for a later retry instead of losing it;
+        any other handler bug is logged and reported while the
+        consumer loop stays alive. Cancellation always propagates.
+        """
+        assert self._response_handler is not None
+        try:
+            outcome = await self._response_handler(message)
+        except asyncio.CancelledError:
+            raise
+        except RetryableInfrastructureError as exc:
+            logger.warning(
+                "inbound response %s retained after %s",
+                message.message_id,
+                type(exc).__name__,
+            )
+            await self.unhandled.put(message)
+            return DispatchResult(
+                REJECTED,
+                message.message_id,
+                message.request_id,
+                "retained-for-retry",
+            )
+        except Exception as exc:  # noqa: BLE001 - loop stays alive
+            logger.error(
+                "inbound response %s failed unexpectedly: %s",
+                message.message_id,
+                type(exc).__name__,
+            )
+            return DispatchResult(
+                REJECTED,
+                message.message_id,
+                message.request_id,
+                type(exc).__name__,
+            )
+        if outcome is not None and getattr(outcome, "status", None) in (
+            REGISTERED,
+            DUPLICATE,
+        ):
+            return DispatchResult(
+                HANDLED,
+                message.message_id,
+                message.request_id,
+                str(getattr(outcome, "detail", "") or outcome.status),
+            )
+        detail = (
+            str(getattr(outcome, "detail", ""))
+            if outcome is not None
+            else "no-outcome"
+        )
+        return DispatchResult(
+            REJECTED, message.message_id, message.request_id, detail,
+        )
 
     async def run(
         self, receive: Callable[[], Awaitable[Any]]

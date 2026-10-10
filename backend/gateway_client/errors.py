@@ -21,3 +21,12 @@ class AckTimeoutError(GatewayClientError):
 
 class ConnectionLostError(GatewayClientError):
     """The connection dropped mid-operation (outcome ambiguous)."""
+
+
+class MessageTooLargeError(GatewayClientError):
+    """The envelope exceeds the sender-side size limit (never sent).
+
+    Raised deterministically before any bytes move, so callers must
+    classify it as a permanent pre-send rejection — never as an
+    ambiguous transmission.
+    """

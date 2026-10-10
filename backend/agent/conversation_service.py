@@ -102,6 +102,16 @@ class ConversationService:
                 conversation_id, limit=limit
             )
 
+    async def list_conversations(
+        self, agent_id: str, *, limit: int = 100, offset: int = 0
+    ) -> list[Conversation]:
+        """Threads of one locally owned agent, oldest first."""
+        async with self._sessions() as session:
+            await self._require_local_agent(session, agent_id)
+            return await ConversationRepository(session).list_by_agent(
+                agent_id, limit=limit, offset=offset
+            )
+
     async def submit_turn(
         self,
         agent_id: str,

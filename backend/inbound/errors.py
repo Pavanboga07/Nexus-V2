@@ -65,3 +65,7 @@ class InboundInfrastructureError(InboundError):
     type. The original exception is always chained, while the public
     message carries no internals.
     """
+
+
+class HandlerAlreadyRegistered(InboundError):
+    """A response handler is already registered on this dispatcher."""
