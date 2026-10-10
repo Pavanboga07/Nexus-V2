@@ -5,6 +5,7 @@ import { ApiError, describeError } from "../../lib/api/client";
 import { approveRequest, executeRequest, rejectRequest } from "../../lib/api/endpoints";
 import type { RemoteRequest } from "../../lib/api/types";
 import { usePendingApprovals } from "../requests/useRequests";
+import { isPairingRequest } from "../requests/RequestRow";
 import { formatTime } from "../requests/status";
 import { Button } from "../../components/ui/Button";
 import { EmptyState, ErrorState, Skeleton, Spinner, StatusBadge } from "../../components/ui/Feedback";
@@ -109,6 +110,9 @@ function ApprovalCard({
         <span className="font-mono text-sm font-medium text-ink-50">
           {item.request_id.length > 24 ? `${item.request_id.slice(0, 16)}...` : item.request_id}
         </span>
+        {isPairingRequest(item) ? (
+          <StatusBadge tone="neutral" label="Pairing" />
+        ) : null}
         <span className="ml-auto">
           <StatusBadge tone="pending" label="Waiting approval" />
         </span>

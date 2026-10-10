@@ -1,6 +1,7 @@
 """Model-declaration tests (no database; contract checks on metadata)."""
 
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.types import LargeBinary
 
 from backend.persistence.models import (
     Agent,
@@ -10,7 +11,10 @@ from backend.persistence.models import (
     Base,
     Conversation,
     ConversationMessage,
+    PairInvitation,
+    PairLink,
     ProtocolMessage,
+    ProviderCredential,
     RemoteRequest,
     User,
 )
@@ -20,11 +24,12 @@ def _columns(model):
     return set(model.__table__.columns.keys())
 
 
-def test_all_nine_tables_declared():
+def test_all_twelve_tables_declared():
     assert set(Base.metadata.tables) == {
         "users", "agents", "agent_peers", "remote_requests", "messages",
         "outbox_messages", "approvals", "conversations",
-        "conversation_messages", "audit_events",
+        "conversation_messages", "audit_events", "provider_credentials",
+        "pair_invitations", "pair_links",
     }
 
 
@@ -33,6 +38,16 @@ def test_no_private_key_column_anywhere():
         assert "private_key" not in table.columns
         assert "password" not in table.columns
         assert "secret" not in table.columns
+        assert "api_key" not in table.columns
+
+
+def test_provider_key_stored_encrypted_bytes_only():
+    columns = ProviderCredential.__table__.columns
+    assert isinstance(
+        columns["key_encrypted"].type, LargeBinary)
+    assert "key" not in {
+        name for name in columns.keys() if name != "key_encrypted"
+    }
 
 
 def test_protocol_identifiers_are_primary_keys():
@@ -94,5 +109,6 @@ def test_message_sender_recipient_are_not_foreign_keys():
 
 def test_models_importable():
     for model in (User, Agent, AgentPeer, RemoteRequest, ProtocolMessage,
-                  Approval, Conversation, ConversationMessage, AuditEvent):
+                  Approval, Conversation, ConversationMessage, AuditEvent,
+                  ProviderCredential, PairInvitation, PairLink):
         assert model.__tablename__

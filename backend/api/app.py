@@ -43,13 +43,24 @@ from backend.api.events import (
     TicketStore,
     make_event,
 )
-from backend.api.routes import agents, conversations, events, health, requests
+from backend.api.routes import (
+    agents,
+    conversations,
+    events,
+    health,
+    pairings,
+    peers,
+    provider,
+    requests,
+)
 from backend.api.settings import ApiSettings
 from backend.identity.keys import private_key_from_bytes
 from backend.identity.models import AgentIdentity
 from backend.inbound import InboundDispatcher, InboundProcessor
 from backend.mcp.config import MCPManagerConfig
 from backend.mcp.manager import MCPManager
+from backend.pairing.service import PairingService
+from backend.pairing.store import PairingStore
 from backend.persistence.database import (
     check_connectivity,
     create_engine,
@@ -236,13 +247,20 @@ async def _open_gateway_io(state: ApiState, settings: ApiSettings) -> None:
             }))
 
         processor = InboundProcessor(
-            state.sessions, agent_id, on_registered=_on_query)
+            state.sessions, agent_id, on_registered=_on_query,
+            pairing_store=PairingStore(state.sessions))
         dispatcher, receive = InboundDispatcher.from_client(
             client, processor)
         receiver = ResponseReceiver(
             state.sessions, agent_id, provider,
             on_registered=_on_response)
         await receiver.attach(dispatcher)
+        pairing = PairingService(
+            state.sessions, agent_id, provider,
+            on_event=lambda event_type, data: hub.publish(
+                make_event(event_type, data)),
+        )
+        await pairing.attach(dispatcher)
         task = dispatcher.start(receive)
         state.dispatchers.append((dispatcher, task, receiver))
     service = RequestService(state.sessions, provider)
@@ -348,6 +366,9 @@ def create_app(
     application.include_router(conversations.router, prefix="/api/v1")
     application.include_router(requests.router, prefix="/api/v1")
     application.include_router(events.router, prefix="/api/v1")
+    application.include_router(provider.router, prefix="/api/v1")
+    application.include_router(pairings.router, prefix="/api/v1")
+    application.include_router(peers.router, prefix="/api/v1")
 
     @application.exception_handler(ApiError)
     async def _api_error_handler(

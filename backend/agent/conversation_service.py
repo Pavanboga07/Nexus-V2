@@ -117,11 +117,18 @@ class ConversationService:
         agent_id: str,
         conversation_id: Any,
         user_text: str,
+        runtime: Any = None,
     ) -> ConversationTurn:
-        """Run one user→assistant turn with atomic transcript writes."""
+        """Run one user→assistant turn with atomic transcript writes.
+
+        ``runtime`` optionally overrides the model for this turn (used
+        by routes resolving per-owner provider configuration); locks,
+        loading, and persistence stay on this service either way.
+        """
         if not isinstance(user_text, str) or not user_text.strip():
             raise InvalidInputError("user_text must be a non-empty string")
-        limit = self._runtime.config.max_input_chars
+        active = runtime if runtime is not None else self._runtime
+        limit = active.config.max_input_chars
         if len(user_text) > limit:
             raise InvalidInputError(
                 f"user_text exceeds {limit} characters"
@@ -136,10 +143,10 @@ class ConversationService:
                     session
                 ).list_recent(
                     conversation_id,
-                    self._runtime.config.max_history_messages,
+                    active.config.max_history_messages,
                 )
             history = [self._to_message(row) for row in stored]
-            response = await self._runtime.run(user_text, history)
+            response = await active.run(user_text, history)
             async with session_scope(self._sessions) as session:
                 messages = ConversationMessageRepository(session)
                 user_row = await messages.create(

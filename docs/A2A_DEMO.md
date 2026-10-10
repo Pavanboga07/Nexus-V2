@@ -67,15 +67,32 @@ operational minimum is:
 - one `users` row for the owner UUID,
 - one `agents` row (owned, active) with the Ed25519 public key,
 - `NEXUS_API_IDENTITY_KEYS_PATH` pointing at
-  `{"<agent_id>": "<base64 private-key bytes>"}` (mode 0600),
-- one `agent_peers` row toward the other machine's agent id with
-  status `connected` (both directions, one row per machine),
-- the other machine's `agents` row present (unowned) so signatures
-  resolve.
+  `{"<agent_id>": "<base64 private-key bytes>"}` (mode 0600).
 
-## 3. Deterministic model (no paid LLM key needed)
+Peer rows are created by the pairing flow itself (section 5) — do not
+insert them by hand. The other machine's `agents` row is created
+automatically when its pairing request arrives.
 
-On both machines, explicitly opt in to the development model:
+## 3. Configure the AI provider (UI or deterministic stand-in)
+
+**Option A — real provider through the UI (recommended).** Open the
+frontend, go to Settings → AI Provider: choose Google Gemini, enter
+the model (e.g. `gemini-2.0-flash`) and API key, Save, then Test
+connection (one minimal live call). The key is stored encrypted
+(`NEXUS_API_CREDENTIAL_KEY` must be set on the backend, otherwise
+saving fails closed) and is never displayed again. Chat turns and
+remote execution immediately use it; removing it falls back to
+environment settings.
+
+The backend also needs the credential master key:
+
+```bash
+# Generate once per deployment, keep it with your other secrets:
+export NEXUS_API_CREDENTIAL_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+```
+
+**Option B — deterministic stand-in (no paid key).** On both
+machines:
 
 ```bash
 export NEXUS_LLM_MODEL="deterministic:demo"
@@ -103,28 +120,44 @@ Expected log: `no NEXUS_LLM_MODEL configured` must NOT appear (the
 deterministic model is configured); each backend connects its
 GatewayClient at startup (`_open_gateway_io`).
 
-## 5. Run the demo flow
+## 5. Pair the agents (in the UI, no terminal surgery)
 
-1. **A submits:** `POST /api/v1/requests`
-   `{sender_agent_id: <A>, recipient_agent_id: <B>, query: "..."}` →
-   `201`, status `QUEUED`. (Or use the frontend's collapsed
-   "Ask a connected agent" panel.)
+1. **B invites:** on B's frontend, Agents → Connect a new agent →
+   Invite a partner → Create invitation. Copy the one-time code and
+   send it to User A out-of-band. The code expires (default 24 h);
+   B can revoke it from the same panel.
+2. **A accepts:** on A's frontend, Agents → Accept invitation → paste
+   the code → Validate invitation. Check the agent id, key
+   fingerprint, and expiry against what B told you out-of-band, then
+   Send pairing request.
+3. **B approves:** the pairing request appears in B's Approvals inbox
+   labeled *Pairing*. Approve it there.
+4. **B completes:** open the approved pairing request → Complete
+   pairing. B's peer row connects and a signed acceptance travels
+   back; A's link flips to completed (watch it update live).
+5. From now on both agents list each other as connected peers, and
+   A's "Ask a connected agent" panel offers B.
+
+## 6. Run the demo flow
+
+1. **A submits:** in any chat, open "Ask a connected agent", pick
+   B's agent, write the task, Send request → `201` with a real
+   request ID. (Or `POST /api/v1/requests` directly.)
 2. **Transport:** A's worker sends it; the Gateway routes it; B's
    dispatcher registers it. Confirm:
    `GET /api/v1/approvals/pending` on B lists it as
    `WAITING_APPROVAL`.
-3. **B approves:** `POST /api/v1/requests/{id}/approve` → `APPROVED`.
+3. **B approves:** `POST /api/v1/requests/{id}/approve` → `APPROVED`
+   (or Approve & run in B's Approvals inbox).
 4. **B executes:** `POST /api/v1/requests/{id}/execute` → `COMPLETED`
-   with `executed: true` and a `response_message_id`. The answer is
-   the deterministic text.
+   with `executed: true` and a `response_message_id`.
 5. **A receives:** B's worker delivers the signed response; A's
    receiver validates and completes. Confirm on A:
    `GET /api/v1/requests/{id}` → `COMPLETED`,
-   `response_message_id` matches B's, `answer` equals the
-   deterministic text.
-6. **Frontend (optional):** point each browser at its local
-   frontend, paste that machine's bearer token, and watch Chats /
-   Requests / Approvals update over the live event stream.
+   `response_message_id` matches B's, `answer` holds the result.
+6. **Frontend:** each browser stays on its local frontend with that
+   machine's bearer token; Chats / Requests / Approvals / Agents
+   update over the live event stream (pairing events included).
 
 ## 6. Diagnose failures
 
@@ -134,10 +167,13 @@ GatewayClient at startup (`_open_gateway_io`).
 | Request stuck `QUEUED` | Worker's GatewayClient connected? (`NEXUS_API_GATEWAY_URL` reachable; Render service awake, not sleeping) |
 | `SIGNING_NOT_CONFIGURED` on create | Keys file missing/unset (create path) |
 | Approval `409` | Item already decided or expired; re-query state first |
-| Execute `503` | Model unconfigured: set both `NEXUS_LLM_*` vars (deterministic or provider) |
+| Execute `503` | Model unconfigured: save a provider in Settings → AI Provider, or set both `NEXUS_LLM_*` vars (deterministic or provider) |
+| Pairing invitation rejected | Expired, revoked, already used, or pasted with whitespace errors; ask B for a fresh code |
+| Pairing stuck pending | B must approve the pairing request, then Complete pairing on its detail page; A waits for the signed acceptance |
+| `HEAD /` tracebacks in Gateway logs | Fixed in current `main`: plain-HTTP probes get clean `404` JSON, upgrades proceed normally |
 | Response never completes A | B's worker running; A still `SENT`; check B's request reached `COMPLETED` first |
 | Render deploy unhealthy | Health Check Path must be `/healthz`; start command must bind `0.0.0.0 --port $PORT` |
-| `HEAD /` tracebacks in Gateway logs | Normal: the HTTP parser accepts GET only; plain probes are dropped pre-handshake with no A2A impact |
+| `HEAD /` tracebacks in Gateway logs | Only on builds predating the `main` HEAD-handling fix; current code answers clean `404` JSON |
 
 ## 7. Automated proof
 

@@ -72,6 +72,7 @@ records through the authenticated REST API.
 | `remote.request.updated` | Approval, rejection, or a terminal execution/receiver outcome commits |
 | `remote.response.received` | Component 11 persists a response and completes/fails the request |
 | `execution.updated` | `RemoteExecutor` returns an outcome for an approved request |
+| `remote.pairing.updated` | A pairing link changes (`pending`, `completed`, `rejected`; pairing id + request id, no secrets) |
 
 Events fire only for committed transitions: rolled-back operations,
 duplicate deliveries (no new transition), and rejected responses emit

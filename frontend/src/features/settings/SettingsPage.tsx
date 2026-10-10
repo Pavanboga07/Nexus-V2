@@ -6,6 +6,7 @@ import { Button } from "../../components/ui/Button";
 import { Field, TextInput } from "../../components/ui/Field";
 import { Spinner } from "../../components/ui/Feedback";
 import { PageHeader } from "../../components/ui/PageHeader";
+import { AiProviderSection } from "./AiProviderSection";
 
 /** Local API configuration and connection diagnostics. The token is
  *  never displayed back; it can only be replaced or cleared. */
@@ -115,6 +116,8 @@ export function SettingsPage() {
           </div>
         </form>
       </section>
+
+      <AiProviderSection />
 
       <section aria-labelledby="events-heading" className="mt-4 rounded-card border border-graphite-700 bg-graphite-900 p-5">
         <h2 id="events-heading" className="text-base font-semibold text-ink-50">Live events</h2>

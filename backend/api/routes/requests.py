@@ -7,6 +7,9 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Request
 
 from backend.api import deps
+from backend.api.effective_runtime import (
+    effective_runtime as _effective_runtime_of,
+)
 from backend.api.errors import (
     EXECUTION_NOT_CONFIGURED,
     SIGNING_NOT_CONFIGURED,
@@ -19,6 +22,7 @@ from backend.api.events import (
     REQUEST_UPDATED,
     make_event,
 )
+from backend.provider_config.errors import ProviderConfigError
 from backend.api.schemas import (
     ApprovalAction,
     ExecutionBody,
@@ -258,7 +262,12 @@ async def execute_request(
     the recipient side before invoking it.
     """
     state = deps.state_of(request)
-    if state.runtime is None or state.identities is None:
+    try:
+        runtime = await _effective_runtime_of(
+            request, settings.owner_user_id)
+    except ProviderConfigError as exc:
+        raise to_api_error(exc)
+    if runtime is None or state.identities is None:
         status, code, message = EXECUTION_NOT_CONFIGURED
         raise ApiError(status, code, message)
     record = await deps.request_involving_caller(
@@ -279,7 +288,7 @@ async def execute_request(
             state.sessions,
             record.recipient_agent_id,
             state.identities,
-            state.runtime,
+            runtime,
         ).execute(request_id)
     except RequestServiceError as exc:
         raise to_api_error(exc)

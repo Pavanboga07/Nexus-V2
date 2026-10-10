@@ -6,8 +6,12 @@ from fastapi import APIRouter, Depends, Request
 
 from backend.agent.errors import AgentRuntimeError
 from backend.api import deps
+from backend.api.effective_runtime import (
+    effective_runtime as _effective_runtime_of,
+)
 from backend.api.errors import MODEL_NOT_CONFIGURED, ApiError, to_api_error
 from backend.api.events import TURN_COMPLETED, make_event
+from backend.provider_config.errors import ProviderConfigError
 from backend.api.schemas import (
     ConversationBody,
     ConversationCreate,
@@ -107,8 +111,28 @@ async def submit_turn(
     agent_id = await deps.owned_conversation_agent(
         state.sessions, settings.owner_user_id, conversation_id)
     try:
-        turn = await _conversations_of(request).submit_turn(
-            agent_id, _conversation_uuid(conversation_id), body.message)
+        runtime = await _effective_runtime_of(
+            request, settings.owner_user_id)
+    except ProviderConfigError as exc:
+        raise to_api_error(exc)
+    if runtime is None:
+        status, code, message = MODEL_NOT_CONFIGURED
+        raise ApiError(status, code, message)
+    try:
+        service = _conversations_of(request)
+    except ApiError:
+        # Startup had no model, but the owner configured one since:
+        # a transient service still gives atomic transcript writes
+        # (per-conversation locks apply to the shared instance).
+        from backend.agent.conversation_service import (
+            ConversationService as _ConversationService,
+        )
+
+        service = _ConversationService(state.sessions, runtime)
+    try:
+        turn = await service.submit_turn(
+            agent_id, _conversation_uuid(conversation_id), body.message,
+            runtime=runtime)
     except AgentRuntimeError as exc:
         raise to_api_error(exc)
     deps.state_of(request).events.publish(make_event(TURN_COMPLETED, {

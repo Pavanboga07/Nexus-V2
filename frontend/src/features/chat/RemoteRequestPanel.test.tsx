@@ -129,7 +129,23 @@ describe("RemoteRequestPanel", () => {
     });
     renderApp(<RemoteRequestPanel onCollapse={() => {}} />);
     expect(await screen.findByText(/no connected agent/i)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /view agents/i })).toHaveAttribute("href", "/agents");
+    expect(screen.getByRole("link", { name: /pair an agent first/i })).toHaveAttribute("href", "/agents");
+  });
+
+  it("excludes pending peers from the recipient list", async () => {
+    seedAuth();
+    stubFetch({
+      "GET /api/v1/agents": { body: AGENTS },
+      "GET /api/v1/agents/local-1/peers": {
+        body: [{ peer_agent_id: "remote-pending", status: "pending" }],
+      },
+    });
+    renderApp(<RemoteRequestPanel onCollapse={() => {}} />);
+    // A pending-only network is equivalent to no connected agent.
+    expect(await screen.findByText(/no connected agent/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /pair an agent first/i }),
+    ).toHaveAttribute("href", "/agents");
   });
 
   it("never places the token in a URL", async () => {

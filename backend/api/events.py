@@ -38,6 +38,7 @@ APPROVAL_REQUIRED = "remote.request.approval_required"
 REQUEST_UPDATED = "remote.request.updated"
 RESPONSE_RECEIVED = "remote.response.received"
 EXECUTION_UPDATED = "execution.updated"
+PAIRING_UPDATED = "remote.pairing.updated"
 
 EVENT_TYPES = frozenset({
     TURN_COMPLETED,
@@ -46,6 +47,7 @@ EVENT_TYPES = frozenset({
     REQUEST_UPDATED,
     RESPONSE_RECEIVED,
     EXECUTION_UPDATED,
+    PAIRING_UPDATED,
 })
 
 

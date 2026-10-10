@@ -4,7 +4,14 @@ import type {
   Conversation,
   ConversationMessage,
   Execution,
+  InvitationCreated,
+  InvitationInfo,
+  InvitationRow,
+  Pairing,
+  PairingCompletion,
   Peer,
+  ProviderStatus,
+  ProviderTestResult,
   RemoteRequest,
   Ticket,
   Turn,
@@ -199,6 +206,134 @@ export function executeRequest(
 
 export function issueTicket(baseUrl: string, token: string): Promise<Ticket> {
   return request<Ticket>(baseUrl, token, "/events/ticket", { method: "POST" });
+}
+
+export function getProviderStatus(
+  baseUrl: string,
+  token: string,
+): Promise<ProviderStatus> {
+  return request<ProviderStatus>(baseUrl, token, "/settings/ai-provider");
+}
+
+export function saveProviderConfig(
+  baseUrl: string,
+  token: string,
+  body: { provider: string; model: string; api_key: string },
+): Promise<ProviderStatus> {
+  return request<ProviderStatus>(baseUrl, token, "/settings/ai-provider", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteProviderConfig(
+  baseUrl: string,
+  token: string,
+): Promise<{ removed: boolean }> {
+  return request<{ removed: boolean }>(baseUrl, token, "/settings/ai-provider", {
+    method: "DELETE",
+  });
+}
+
+export function testProviderConfig(
+  baseUrl: string,
+  token: string,
+  body: { provider?: string; model?: string; api_key?: string },
+): Promise<ProviderTestResult> {
+  return request<ProviderTestResult>(
+    baseUrl, token, "/settings/ai-provider/test",
+    { method: "POST", body: JSON.stringify(body) },
+  );
+}
+
+export function createInvitation(
+  baseUrl: string,
+  token: string,
+  body: { agent_id: string; ttl_seconds?: number },
+): Promise<InvitationCreated> {
+  return request<InvitationCreated>(
+    baseUrl, token, "/pairings/invitations",
+    { method: "POST", body: JSON.stringify(body) },
+  );
+}
+
+export function listInvitations(
+  baseUrl: string,
+  token: string,
+  agentId: string,
+): Promise<InvitationRow[]> {
+  return request<InvitationRow[]>(
+    baseUrl, token,
+    `/pairings/invitations?agent_id=${encodeURIComponent(agentId)}`,
+  );
+}
+
+export function revokeInvitation(
+  baseUrl: string,
+  token: string,
+  invitationId: string,
+): Promise<{ revoked: boolean }> {
+  return request<{ revoked: boolean }>(
+    baseUrl, token,
+    `/pairings/invitations/${encodeURIComponent(invitationId)}/revoke`,
+    { method: "POST" },
+  );
+}
+
+export function validateInvitation(
+  baseUrl: string,
+  token: string,
+  invitation: string,
+): Promise<InvitationInfo> {
+  return request<InvitationInfo>(baseUrl, token, "/pairings/validate", {
+    method: "POST",
+    body: JSON.stringify({ invitation }),
+  });
+}
+
+export function acceptPairing(
+  baseUrl: string,
+  token: string,
+  body: { invitation: string; sender_agent_id: string },
+): Promise<Pairing> {
+  return request<Pairing>(baseUrl, token, "/pairings/accept", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function listPairings(
+  baseUrl: string,
+  token: string,
+  agentId: string,
+): Promise<Pairing[]> {
+  return request<Pairing[]>(
+    baseUrl, token,
+    `/pairings?agent_id=${encodeURIComponent(agentId)}`,
+  );
+}
+
+export function completePairing(
+  baseUrl: string,
+  token: string,
+  requestId: string,
+): Promise<PairingCompletion> {
+  return request<PairingCompletion>(baseUrl, token, "/pairings/complete", {
+    method: "POST",
+    body: JSON.stringify({ request_id: requestId }),
+  });
+}
+
+export function revokePeer(
+  baseUrl: string,
+  token: string,
+  peerAgentId: string,
+): Promise<{ revoked: number }> {
+  return request<{ revoked: number }>(
+    baseUrl, token,
+    `/peers/${encodeURIComponent(peerAgentId)}/revoke`,
+    { method: "POST" },
+  );
 }
 
 export function checkLive(baseUrl: string): Promise<{ status: string }> {

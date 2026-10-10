@@ -53,6 +53,97 @@ class PeerBody(StrictModel):
     status: str
 
 
+# -- provider configuration -------------------------------------------------
+
+class ProviderSave(StrictModel):
+    provider: str = Field(min_length=1, max_length=32)
+    model: str = Field(min_length=1, max_length=128)
+    api_key: str = Field(min_length=1, max_length=8192)
+
+
+class ProviderStatus(StrictModel):
+    configured: bool
+    provider: str | None = None
+    model: str | None = None
+    updated_at: str | None = None
+
+
+class ProviderTest(StrictModel):
+    provider: str | None = Field(default=None, min_length=1, max_length=32)
+    model: str | None = Field(default=None, min_length=1, max_length=128)
+    api_key: str | None = Field(default=None, min_length=1, max_length=8192)
+
+
+class ProviderTestResult(StrictModel):
+    ok: bool = True
+    provider: str
+    model: str
+    latency_ms: int
+    reply_preview: str
+
+
+# -- pairing ------------------------------------------------------------------
+
+class InvitationCreate(StrictModel):
+    agent_id: str = Field(min_length=1, max_length=128)
+    ttl_seconds: int = Field(default=86400, ge=60, le=2592000)
+
+
+class InvitationCreated(StrictModel):
+    invitation_id: str
+    invitation: str
+    secret: str
+    expires_at: str
+
+
+class InvitationBody(StrictModel):
+    invitation_id: str
+    issuer_agent_id: str
+    expires_at: str
+    used: bool
+    revoked: bool
+
+
+class InvitationValidate(StrictModel):
+    invitation: str = Field(min_length=1, max_length=8192)
+
+
+class InvitationInfo(StrictModel):
+    agent_id: str
+    public_key: str
+    fingerprint: str
+    expires_at: str
+
+
+class PairingAccept(StrictModel):
+    invitation: str = Field(min_length=1, max_length=8192)
+    sender_agent_id: str = Field(min_length=1, max_length=128)
+
+
+class PairingBody(StrictModel):
+    pairing_id: str
+    local_agent_id: str
+    remote_agent_id: str
+    status: str
+    invitation_id: str | None = None
+    request_id: str | None = None
+
+
+class PairingComplete(StrictModel):
+    request_id: str = Field(min_length=1, max_length=128)
+
+
+class PairingCompletion(StrictModel):
+    pairing_id: str
+    approved: bool
+    message_id: str
+    ack: str
+
+
+class PeerRevokeResult(StrictModel):
+    revoked: int
+
+
 # -- conversations ------------------------------------------------------------
 
 class ConversationCreate(StrictModel):

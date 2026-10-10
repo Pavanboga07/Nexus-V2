@@ -126,6 +126,7 @@ class InboundProcessor:
         local_agent_id: str,
         replay_registry: Any | None = None,
         on_registered: Any | None = None,
+        pairing_store: Any | None = None,
     ) -> None:
         """Bind the processor to one local agent id.
 
@@ -140,11 +141,20 @@ class InboundProcessor:
         (never for duplicates, never before commit). Callback failures
         are logged and swallowed: they must never undo or obscure the
         committed outcome.
+
+        ``pairing_store`` is an optional
+        :class:`backend.pairing.store.PairingStore` enabling first
+        contact: a ``nexus.pair``-flagged query carrying a valid,
+        unexpired, unrevoked, unused invitation secret registers even
+        when no sender row or connected peer exists yet. The invitation
+        is burned atomically with registration. Ordinary queries never
+        consult it.
         """
         self._sessions = sessions
         self._local_agent_id = local_agent_id
         self._replay = replay_registry
         self._on_registered = on_registered
+        self._pairing = pairing_store
 
     @property
     def local_agent_id(self) -> str:
@@ -249,23 +259,33 @@ class InboundProcessor:
                 "an active local agent"
             )
         sender = await agents.get(message.sender)
-        if sender is None:
-            raise InboundUnknownSender(
-                f"unknown sender {message.sender!r}"
-            )
-        if not sender.active:
-            raise InboundInactiveSender(
-                f"sender {message.sender!r} is deactivated"
-            )
-        public_key = self._sender_public_key(message, sender)
         peer = await PeerRepository(session).get(
             self._local_agent_id, message.sender
         )
-        if peer is None or peer.status != "connected":
-            raise InboundPeerError(
-                f"no connected peer relationship {message.sender!r} "
-                f"-> {self._local_agent_id!r}"
-            )
+        fully_paired = (
+            sender is not None
+            and sender.active
+            and peer is not None
+            and peer.status == "connected"
+        )
+        if not fully_paired:
+            bootstrapped = await self._try_pairing_bootstrap(
+                session, message, current)
+            if not bootstrapped:
+                if sender is None:
+                    raise InboundUnknownSender(
+                        f"unknown sender {message.sender!r}"
+                    )
+                if not sender.active:
+                    raise InboundInactiveSender(
+                        f"sender {message.sender!r} is deactivated"
+                    )
+                raise InboundPeerError(
+                    f"no connected peer relationship {message.sender!r} "
+                    f"-> {self._local_agent_id!r}"
+                )
+            sender = await agents.get(message.sender)
+        public_key = self._sender_public_key(message, sender)
         try:
             verify_message(message, public_key, now=current)
         except ReplayDetectedError:
@@ -347,6 +367,69 @@ class InboundProcessor:
             message_id=message.message_id,
             record=RequestRecord.from_row(row, message_id=message.message_id),
         )
+
+    async def _try_pairing_bootstrap(
+        self,
+        session: AsyncSession,
+        message: NexusMessage,
+        current: datetime,
+    ) -> bool:
+        """First contact via invitation (same transaction, or nothing).
+
+        Returns True after creating the sender agent row (key as
+        asserted in the pairing payload, trusted through the
+        invitation secret), a ``pending`` peer row, and burning the
+        invitation — all inside the caller's registration transaction.
+        Returns False without touching state for ordinary queries or
+        any invalid pairing material, letting the normal errors apply.
+        """
+        from backend.pairing import invitation as invitation_mod
+        from backend.pairing.invitation import PAIR_CAPABILITY
+        from backend.pairing.service import PairingService
+
+        if self._pairing is None:
+            return False
+        payload = message.payload
+        capabilities = getattr(payload, "requested_capabilities", [])
+        if PAIR_CAPABILITY not in list(capabilities or []):
+            return False
+        parsed = PairingService.parse_pairing_query(
+            getattr(payload, "query", None))
+        if parsed is None:
+            return False
+        if parsed["agent"]["agent_id"] != message.sender:
+            return False
+        # Redelivered identical pairing content resolves through the
+        # normal duplicate path below instead of burning anything.
+        existing = await RemoteRequestRepository(session).get(
+            message.request_id)
+        if (existing is not None
+                and self._same_request(existing, message)):
+            return True
+        try:
+            invitation_mod.decode_public_key(
+                parsed["agent"]["public_key"])
+        except Exception:  # noqa: BLE001 - invalid key material
+            return False
+        redeemed = await self._pairing.redeem_for_registration(
+            session,
+            parsed["invitation_id"],
+            parsed["secret"],
+            message.recipient,
+            current,
+        )
+        if not redeemed:
+            return False
+        agents = AgentRepository(session)
+        if await agents.get(message.sender) is None:
+            await agents.create(
+                message.sender, parsed["agent"]["public_key"])
+        peers = PeerRepository(session)
+        peer = await peers.get(self._local_agent_id, message.sender)
+        if peer is None:
+            await peers.create(
+                self._local_agent_id, message.sender, status="pending")
+        return True
 
     def _sender_public_key(self, message: NexusMessage, sender: Any):
         """Decode the stored sender key (never trust the wire for this)."""

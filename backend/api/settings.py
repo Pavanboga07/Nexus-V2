@@ -44,6 +44,10 @@ class ApiSettings:
     # execution endpoint's IdentityProvider (dev-grade single-owner
     # key material handling; production hardening deferred).
     identity_keys_path: str | None = None
+    # Master key for provider-credential encryption at rest (Fernet
+    # urlsafe-b64). Absent means the credential store is unavailable:
+    # saves fail closed and nothing is ever written in plaintext.
+    credential_key: str | None = None
     # Extra knobs with safe defaults (tests override the object).
     extra: dict = field(default_factory=dict)
     # Explicit browser origins allowed on the WebSocket endpoint, in
@@ -108,6 +112,7 @@ class ApiSettings:
             ),
             mcp_config_path=_get(env, prefix + "MCP_CONFIG_PATH"),
             identity_keys_path=_get(env, prefix + "IDENTITY_KEYS_PATH"),
+            credential_key=_get(env, prefix + "CREDENTIAL_KEY"),
             allowed_origins=tuple(
                 origin.strip() for origin in (origins_raw or "").split(",")
                 if origin.strip()

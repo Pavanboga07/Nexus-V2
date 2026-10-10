@@ -56,7 +56,11 @@ export function useNetwork(): NetworkState {
 
   useEffect(() => subscribe("agents", () => void load()), [subscribe, load]);
 
-  const connectedCount = agents.reduce((sum, agent) => sum + agent.peers.length, 0);
+  const connectedCount = agents.reduce(
+    (sum, agent) =>
+      sum + agent.peers.filter((peer) => peer.status === "connected").length,
+    0,
+  );
 
   return { agents, networkState, networkError, reload: () => void load(), connectedCount };
 }
