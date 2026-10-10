@@ -35,6 +35,10 @@ from backend.persistence.database import session_scope
 from backend.persistence.errors import ConflictError
 from backend.persistence.repositories.agents import AgentRepository
 from backend.persistence.repositories.approvals import ApprovalRepository
+from backend.persistence.repositories.conversations import (
+    ConversationMessageRepository,
+    ConversationRepository,
+)
 from backend.persistence.repositories.messages import MessageRepository
 from backend.persistence.repositories.outbox import OutboxRepository
 from backend.persistence.repositories.peers import PeerRepository
@@ -632,4 +636,36 @@ class RequestService:
                     failure_message=payload.error_message or payload.answer,
                 )
             assert updated is not None
+            if payload.status == "ok":
+                await self._mirror_answer_to_thread(
+                    session, row, payload)
             return RequestRecord.from_row(updated, message.message_id)
+
+    @staticmethod
+    async def _mirror_answer_to_thread(
+        session: AsyncSession, row: Any, payload: Any,
+    ) -> None:
+        """Append a verified answer into the sender's linked thread.
+
+        Runs inside the response-registration transaction, so the chat
+        message and the COMPLETED state commit atomically: no lost
+        answers on crash, and a redelivered response resolves
+        DUPLICATE before reaching here (exactly one copy ever).
+        Failures are impossible by construction here (validated ids,
+        bounded text) — anything unexpected propagates with the
+        transaction rather than recording half a completion.
+        """
+        thread_id = row.conversation_id
+        if thread_id is None:
+            return
+        answer = getattr(payload, "answer", None)
+        if not isinstance(answer, str) or not answer.strip():
+            return
+        thread = await ConversationRepository(session).get(thread_id)
+        if thread is None or thread.agent_id != row.sender_agent_id:
+            return
+        await ConversationMessageRepository(session).create(
+            thread_id, "agent", answer,
+            request_id=row.request_id,
+            meta={"remote_agent_id": row.recipient_agent_id},
+        )

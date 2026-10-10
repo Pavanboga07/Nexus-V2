@@ -237,6 +237,7 @@ function ThreadViewInner({ conversationId }: { conversationId: string }) {
         sendError={thread.sendError}
         onSend={(message) => void thread.send(message)}
         connectedAgentCount={network.connectedCount}
+        conversationId={conversationId}
       />
     </>
   );

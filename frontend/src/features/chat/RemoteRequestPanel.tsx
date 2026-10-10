@@ -38,8 +38,13 @@ function loadDraft(): { recipient: string; query: string } {
 
 /** Collapsible connected-agent composer. Never sends on collapse; the
  *  unsent draft survives collapse and reopening. Submits only to the
- *  remote-request endpoint, never to the local conversation. */
-export function RemoteRequestPanel({ onCollapse }: { onCollapse: () => void }) {
+ *  remote-request endpoint, never to the local conversation. When
+ *  `conversationId` is given, the request links that thread: the
+ *  question posts immediately and the verified answer arrives there. */
+export function RemoteRequestPanel({ onCollapse, conversationId }: {
+  onCollapse: () => void;
+  conversationId?: string | null;
+}) {
   const { baseUrl, token } = useAuth();
   const { notify } = useToast();
   const [agents, setAgents] = useState<EligibleAgent[]>([]);
@@ -116,6 +121,7 @@ export function RemoteRequestPanel({ onCollapse }: { onCollapse: () => void }) {
         sender_agent_id: sender.agent_id,
         recipient_agent_id: recipientId,
         query: query.trim(),
+        ...(conversationId ? { conversation_id: conversationId } : {}),
       });
       setSuccess({ requestId: created.request_id, status: created.status });
       setQuery("");

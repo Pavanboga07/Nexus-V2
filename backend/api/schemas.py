@@ -194,6 +194,11 @@ class RequestCreate(StrictModel):
     # Lifetime of the request from now, in seconds.
     expires_in_seconds: int = Field(default=3600, ge=60,
                                     le=7 * 24 * 3600)
+    # Optional sender-side chat thread to mirror into: the question is
+    # posted when the request is created, the verified answer when the
+    # signed response lands. Must belong to the sender agent.
+    conversation_id: str | None = Field(default=None, min_length=1,
+                                       max_length=128)
 
 
 class RequestBody(StrictModel):
@@ -211,6 +216,8 @@ class RequestBody(StrictModel):
     response_message_id: str | None = None
     # Present only for terminal requests with a stored answer.
     answer: str | None = None
+    # Sender-side chat thread mirrored into, if the sender linked one.
+    conversation_id: str | None = None
 
 
 class ApprovalAction(StrictModel):
@@ -270,4 +277,6 @@ def request_body(record: Any, answer: str | None = None) -> RequestBody:
         failure_message=record.failure_message,
         response_message_id=record.response_message_id,
         answer=answer,
+        conversation_id=(str(record.conversation_id)
+                         if record.conversation_id is not None else None),
     )

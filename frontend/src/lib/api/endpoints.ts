@@ -102,6 +102,8 @@ export interface CreateRequestBody {
   query: string;
   requested_capabilities?: string[];
   expires_in_seconds?: number;
+  /** Sender-side chat thread to mirror Q&A into (optional). */
+  conversation_id?: string;
 }
 
 export function createRemoteRequest(

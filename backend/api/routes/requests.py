@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import uuid as uuid_mod
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Request
@@ -20,6 +22,7 @@ from backend.api.events import (
     EXECUTION_UPDATED,
     REQUEST_CREATED,
     REQUEST_UPDATED,
+    TURN_COMPLETED,
     make_event,
 )
 from backend.provider_config.errors import ProviderConfigError
@@ -31,6 +34,10 @@ from backend.api.schemas import (
     request_body,
 )
 from backend.execution.executor import RemoteExecutor
+from backend.persistence.database import session_scope
+from backend.persistence.repositories.conversations import (
+    ConversationMessageRepository,
+)
 from backend.persistence.repositories.messages import MessageRepository
 from backend.persistence.repositories.remote_requests import (
     RemoteRequestRepository,
@@ -40,6 +47,8 @@ from backend.requests.models import RequestRecord
 from backend.requests.service import RequestService
 
 router = APIRouter(tags=["requests"])
+
+logger = logging.getLogger("nexus.api.requests")
 
 _LIST_LIMIT = 200
 
@@ -80,6 +89,15 @@ async def create_request(
         state.sessions, settings.owner_user_id)
     if body.sender_agent_id not in owned:
         raise ApiError(404, "UNKNOWN_AGENT", "agent not found")
+    linked_thread: uuid_mod.UUID | None = None
+    if body.conversation_id is not None:
+        thread_agent = await deps.owned_conversation_agent(
+            state.sessions, settings.owner_user_id,
+            body.conversation_id)
+        if thread_agent != body.sender_agent_id:
+            raise ApiError(422, "INVALID_INPUT",
+                           "request input is invalid")
+        linked_thread = uuid_mod.UUID(body.conversation_id)
     try:
         record = await RequestService(
             state.sessions, state.identities
@@ -91,10 +109,32 @@ async def create_request(
             _utcnow() + timedelta(seconds=body.expires_in_seconds),
             request_id=body.request_id,
             message_id=body.message_id,
+            conversation_id=linked_thread,
             now=_utcnow(),
         )
     except RequestServiceError as exc:
         raise to_api_error(exc)
+    if linked_thread is not None:
+        # Mirror the question into the sender's thread so the later
+        # answer lands in a coherent transcript. Chat is best-effort
+        # here: the request itself is already durable, so a mirror
+        # failure degrades to Requests-only instead of failing creation.
+        try:
+            async with session_scope(state.sessions) as session:
+                posted = await ConversationMessageRepository(
+                    session).create(
+                        linked_thread, "user", body.query,
+                        request_id=record.request_id)
+            deps.state_of(request).events.publish(
+                make_event(TURN_COMPLETED, {
+                    "conversation_id": str(linked_thread),
+                    "agent_id": record.sender_agent_id,
+                    "user_message_id": posted.id,
+                    "request_id": record.request_id,
+                }))
+        except Exception:  # noqa: BLE001 - degraded, never fatal
+            logger.warning(
+                "chat mirror skipped for %s", record.request_id)
     deps.state_of(request).events.publish(make_event(REQUEST_CREATED, {
         "request_id": record.request_id,
         "sender": record.sender_agent_id,

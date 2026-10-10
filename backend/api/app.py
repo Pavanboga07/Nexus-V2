@@ -245,6 +245,15 @@ async def _open_gateway_io(state: ApiState, settings: ApiSettings) -> None:
                 "request_id": outcome.request_id,
                 "status": outcome.detail,
             }))
+            thread_id = getattr(outcome.record, "conversation_id", None)
+            if outcome.status == "REGISTERED" and thread_id is not None:
+                # The verified answer was mirrored into the sender's
+                # thread in the same transaction: wake any open chat.
+                _hub.publish(make_event(TURN_COMPLETED, {
+                    "conversation_id": str(thread_id),
+                    "agent_id": outcome.record.sender_agent_id,
+                    "request_id": outcome.request_id,
+                }))
 
         processor = InboundProcessor(
             state.sessions, agent_id, on_registered=_on_query,

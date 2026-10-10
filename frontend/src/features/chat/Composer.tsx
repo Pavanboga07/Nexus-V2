@@ -10,6 +10,8 @@ export interface ComposerProps {
   sendError: string | null;
   onSend: (message: string) => void;
   connectedAgentCount: number;
+  /** Thread the remote panel links (Q&A mirrored into chat). */
+  conversationId?: string | null;
 }
 
 /** Local chat composer first; the connected-agent request panel is a
@@ -20,6 +22,7 @@ export function Composer({
   sendError,
   onSend,
   connectedAgentCount,
+  conversationId = null,
 }: ComposerProps) {
   const [draft, setDraft] = useState("");
   const [panelOpen, setPanelOpen] = useState(false);
@@ -108,7 +111,10 @@ export function Composer({
         </button>
         {panelOpen ? (
           <div id="remote-request-panel" className="border-t border-graphite-800 p-3">
-            <RemoteRequestPanel onCollapse={() => setPanelOpen(false)} />
+            <RemoteRequestPanel
+              onCollapse={() => setPanelOpen(false)}
+              conversationId={conversationId}
+            />
           </div>
         ) : null}
       </div>

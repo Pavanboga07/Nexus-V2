@@ -156,6 +156,8 @@ describe("ChatPage", () => {
       sender_agent_id: "local-1",
       recipient_agent_id: "remote-1",
       query: "Do the thing",
+      // The open thread links automatically: Q&A mirror into chat.
+      conversation_id: "conv-1",
     });
     // No local turn fires as a side effect of the remote send.
     expect(calls.some((call) => call.url.includes("/turns"))).toBe(false);

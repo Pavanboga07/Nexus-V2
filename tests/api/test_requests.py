@@ -13,6 +13,7 @@ from .conftest import (  # noqa: F401
     make_settings,
     make_state,
     seed_inbound_request,
+    seed_owned_agent,
     seed_peer_pair,
 )
 
@@ -21,6 +22,17 @@ def _app(db, settings=None, keys=None):
     settings = settings or make_settings()
     state, keys = make_state(db, settings, keys=keys)
     return create_app(settings, state=state), keys
+
+
+async def _thread_for(db, agent_id, title="t"):
+    from backend.persistence.database import session_scope
+    from backend.persistence.repositories.conversations import (
+        ConversationRepository,
+    )
+
+    async with session_scope(db.sessions) as session:
+        return await ConversationRepository(session).create(
+            agent_id, title=title)
 
 
 @pytest.mark.asyncio
@@ -47,6 +59,70 @@ async def test_create_and_get_request(db):
             f"/api/v1/requests/{body['request_id']}", headers=headers)
         assert fetched.status_code == 200
         assert fetched.json()["request_id"] == body["request_id"]
+
+
+@pytest.mark.asyncio
+async def test_create_with_thread_links_and_posts_question(db):
+    keys = Keys()
+    app, _ = _app(db, settings := make_settings(), keys)
+    local, remote = await seed_peer_pair(db, keys)
+    thread = await _thread_for(db, local.agent_id)
+    async with make_client(app) as client:
+        headers = auth_headers()
+        created = await client.post(
+            "/api/v1/requests", headers=headers, json={
+                "sender_agent_id": local.agent_id,
+                "recipient_agent_id": remote.agent_id,
+                "query": "What is two plus two?",
+                "conversation_id": str(thread.id),
+            })
+        assert created.status_code == 201, created.text
+        body = created.json()
+        assert body["conversation_id"] == str(thread.id)
+        # The question is mirrored into the thread as a user message.
+        history = await client.get(
+            f"/api/v1/conversations/{thread.id}/messages",
+            headers=headers)
+        assert history.status_code == 200, history.text
+        rows = history.json()
+        assert len(rows) == 1
+        assert rows[0]["role"] == "user"
+        assert rows[0]["content"] == "What is two plus two?"
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_foreign_thread(db):
+    import uuid as uuid_mod
+
+    keys = Keys()
+    app, _ = _app(db, settings := make_settings(), keys)
+    local, remote = await seed_peer_pair(db, keys)
+    other = await seed_owned_agent(db, keys, owner=uuid_mod.uuid4())
+    foreign = await _thread_for(db, other.agent_id)
+    async with make_client(app) as client:
+        headers = auth_headers()
+        base = {
+            "sender_agent_id": local.agent_id,
+            "recipient_agent_id": remote.agent_id,
+            "query": "hi",
+        }
+        # Another owner's thread is invisible.
+        assert (await client.post(
+            "/api/v1/requests", headers=headers,
+            json=dict(base, conversation_id=str(foreign.id)))
+        ).status_code == 404
+        # Own thread bound to a different agent is rejected.
+        second = await seed_owned_agent(db, keys)
+        mismatch = await _thread_for(db, second.agent_id)
+        assert (await client.post(
+            "/api/v1/requests", headers=headers,
+            json=dict(base, conversation_id=str(mismatch.id)))
+        ).status_code == 422
+        # Malformed ids fail as invalid input, never 500.
+        assert (await client.post(
+            "/api/v1/requests", headers=headers,
+            json=dict(base, conversation_id="not-a-uuid"))
+        ).status_code == 422
 
 
 @pytest.mark.asyncio

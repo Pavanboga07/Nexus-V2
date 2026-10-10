@@ -31,6 +31,7 @@ from backend.responses import (
 
 from .conftest import (
     Keys,
+    _pub,
     live_times,
     make_receiver,
     response_messages,
@@ -74,6 +75,101 @@ async def test_valid_success_completes_through_receiver(db):
     rebuilt = message_from_dict(
         {**rows[0].envelope, "signature": rows[0].signature})
     assert rebuilt.payload.answer == "four"
+
+
+@pytest.mark.asyncio
+async def test_linked_thread_receives_verified_answer_once(db):
+    from backend.persistence.database import session_scope as _scope
+    from backend.persistence.repositories.agents import (
+        AgentRepository as _Agents,
+    )
+    from backend.persistence.repositories.conversations import (
+        ConversationMessageRepository,
+        ConversationRepository,
+    )
+
+    async def _chat_rows():
+        async with _scope(db.sessions) as session:
+            return await ConversationMessageRepository(
+                session).list_by_conversation(thread.id)
+
+    keys = Keys()
+    originator = keys.add(create_identity())
+    remote = keys.add(create_identity())
+    async with _scope(db.sessions) as session:
+        await _Agents(session).create(
+            originator.agent_id, _pub(originator))
+        thread = await ConversationRepository(session).create(
+            originator.agent_id, title="t")
+    originator, remote, request_id = await seed_originator_sent(
+        db, keys, conversation_id=thread.id,
+        originator=originator, remote=remote)
+    created, _ = live_times()
+    response = signed_response(
+        remote, originator.agent_id, request_id, created=created)
+    outcome = await make_receiver(
+        db, keys, originator.agent_id).handle(response, now=created)
+    assert outcome.status == REGISTERED
+    rows = await _chat_rows()
+    assert len(rows) == 1
+    assert rows[0].role == "agent"
+    assert rows[0].content == "four"
+    assert rows[0].request_id == request_id
+    # Redelivery resolves DUPLICATE without a second chat message.
+    again = await make_receiver(
+        db, keys, originator.agent_id).handle(response, now=created)
+    assert again.status == DUPLICATE
+    assert len(await _chat_rows()) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_or_unlinked_responses_leave_chat_alone(db):
+    from backend.persistence.database import session_scope as _scope
+    from backend.persistence.repositories.agents import (
+        AgentRepository as _Agents,
+    )
+    from backend.persistence.repositories.conversations import (
+        ConversationMessageRepository,
+        ConversationRepository,
+    )
+
+    async def _chat_count(thread_id):
+        async with _scope(db.sessions) as session:
+            return len(await ConversationMessageRepository(
+                session).list_by_conversation(thread_id))
+
+    keys = Keys()
+    originator = keys.add(create_identity())
+    remote = keys.add(create_identity())
+    async with _scope(db.sessions) as session:
+        await _Agents(session).create(
+            originator.agent_id, _pub(originator))
+        thread = await ConversationRepository(session).create(
+            originator.agent_id, title="t")
+    _, _, failed_id = await seed_originator_sent(
+        db, keys, conversation_id=thread.id,
+        originator=originator, remote=remote)
+    created, _ = live_times()
+    failure = signed_response(
+        remote, originator.agent_id, failed_id, created=created,
+        payload_over={"status": "error", "answer": "",
+                      "error_code": "EXECUTION_FAILED",
+                      "error_message": "remote execution failed"},
+    )
+    outcome = await make_receiver(
+        db, keys, originator.agent_id).handle(failure, now=created)
+    assert outcome.status == REGISTERED
+    assert outcome.detail == "FAILED"
+    assert await _chat_count(thread.id) == 0
+    # Unlinked requests never touch any thread either.
+    o2, r2, plain_id = await seed_originator_sent(db, keys)
+    created2, _ = live_times()
+    plain = signed_response(
+        r2, o2.agent_id, plain_id, created=created2)
+    outcome2 = await make_receiver(
+        db, keys, o2.agent_id).handle(plain, now=created2)
+    assert outcome2.status == REGISTERED
+    assert await _chat_count(thread.id) == 0
 
 
 @pytest.mark.asyncio

@@ -96,31 +96,40 @@ def live_times(ttl_hours=1):
     return created, created + timedelta(hours=ttl_hours)
 
 
-async def seed_originator_sent(db, keys, query="What is two plus two?"):
+async def seed_originator_sent(db, keys, query="What is two plus two?",
+                               conversation_id=None,
+                               originator=None, remote=None):
     """Originator creates a request; the worker hands it off (SENT).
 
     Returns (originator, remote, request_id) with durable dispatch
     evidence: request SENT, outbox SENT, outbound query persisted.
+    Pass existing identities to reuse them (e.g. a thread owner).
     """
     from backend.persistence.repositories.messages import MessageRepository
     from backend.persistence.repositories.outbox import OutboxRepository
     from backend.worker.config import WorkerConfig
     from backend.worker.outbox_dispatcher import OutboxDispatcher
 
-    originator = keys.add(create_identity())
-    remote = keys.add(create_identity())
+    originator = originator or keys.add(create_identity())
+    remote = remote or keys.add(create_identity())
     async with session_scope(db.sessions) as session:
-        await AgentRepository(session).create(
-            originator.agent_id, _pub(originator))
-        await AgentRepository(session).create(remote.agent_id, _pub(remote))
-        await PeerRepository(session).create(
-            originator.agent_id, remote.agent_id, status="connected"
-        )
+        if await AgentRepository(session).get(originator.agent_id) is None:
+            await AgentRepository(session).create(
+                originator.agent_id, _pub(originator))
+        if await AgentRepository(session).get(remote.agent_id) is None:
+            await AgentRepository(session).create(
+                remote.agent_id, _pub(remote))
+        if await PeerRepository(session).get(
+            originator.agent_id, remote.agent_id
+        ) is None:
+            await PeerRepository(session).create(
+                originator.agent_id, remote.agent_id, status="connected"
+            )
     created, expires = live_times()
     service = RequestService(db.sessions, keys)
     record = await service.create_remote_request(
         originator.agent_id, remote.agent_id, query, [],
-        expires, now=created,
+        expires, now=created, conversation_id=conversation_id,
     )
     assert record.status == "QUEUED"
 
