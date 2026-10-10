@@ -80,33 +80,38 @@ export function Composer({
             {sendError} Your draft was kept above.
           </p>
         ) : null}
-
-        <div className="rounded-control border border-graphite-800 bg-graphite-900/60">
-          <button
-            type="button"
-            onClick={() => setPanelOpen((open) => !open)}
-            aria-expanded={panelOpen}
-            aria-controls="remote-request-panel"
-            className="flex min-h-[44px] w-full cursor-pointer items-center gap-2 px-3 text-left text-sm text-ink-300 hover:text-ink-50"
-          >
-            <ChevronDown
-              aria-hidden="true"
-              className={`h-4 w-4 transition-transform ${panelOpen ? "rotate-180" : ""}`}
-            />
-            Ask a connected agent
-            <span className="ml-auto text-xs text-ink-600">
-              {connectedAgentCount > 0
-                ? `${connectedAgentCount} available`
-                : "none connected"}
-            </span>
-          </button>
-          {panelOpen ? (
-            <div id="remote-request-panel" className="border-t border-graphite-800 p-3">
-              <RemoteRequestPanel onCollapse={() => setPanelOpen(false)} />
-            </div>
-          ) : null}
-        </div>
       </form>
+
+      {/* The remote-request panel carries its own <form>: it must stay a
+        sibling of the chat form, never nested inside it. Nested forms are
+        a parse error — the inner form is dropped and its submit button
+        silently submits the OUTER form instead (a click on an enabled
+        "Send request" doing nothing, or sending the chat draft). */}
+      <div className="rounded-control border border-graphite-800 bg-graphite-900/60">
+        <button
+          type="button"
+          onClick={() => setPanelOpen((open) => !open)}
+          aria-expanded={panelOpen}
+          aria-controls="remote-request-panel"
+          className="flex min-h-[44px] w-full cursor-pointer items-center gap-2 px-3 text-left text-sm text-ink-300 hover:text-ink-50"
+        >
+          <ChevronDown
+            aria-hidden="true"
+            className={`h-4 w-4 transition-transform ${panelOpen ? "rotate-180" : ""}`}
+          />
+          Ask a connected agent
+          <span className="ml-auto text-xs text-ink-600">
+            {connectedAgentCount > 0
+              ? `${connectedAgentCount} available`
+              : "none connected"}
+          </span>
+        </button>
+        {panelOpen ? (
+          <div id="remote-request-panel" className="border-t border-graphite-800 p-3">
+            <RemoteRequestPanel onCollapse={() => setPanelOpen(false)} />
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
