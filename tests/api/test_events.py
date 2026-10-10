@@ -48,12 +48,14 @@ class FakeWebSocket:
             part.split("=", 1) for part in query.split("&") if part
         ) if query else {}
         self.accepted = False
+        self.accepted_subprotocol = None
         self.close_code = None
         self.sent = []
         self.send_exc = None
 
-    async def accept(self):
+    async def accept(self, subprotocol=None):
         self.accepted = True
+        self.accepted_subprotocol = subprotocol
 
     async def close(self, code=1000):
         self.close_code = code
@@ -302,19 +304,55 @@ async def test_ws_foreign_owner_ticket_rejected(db):
 
 @pytest.mark.asyncio
 async def test_ws_subprotocol_ticket_preferred(db):
+    from backend.api.routes.events import NEGOTIATED_SUBPROTOCOL
+
     settings = make_settings()
     state, _ = make_state(db, settings)
     app = create_app(settings, state=state)
     payload = await _ticket(app)
     fake = FakeWebSocket(
         app, headers={"sec-websocket-protocol":
-                      f"nostromo, nexus-ticket.{payload['ticket']}"})
+                      f"nostromo, nexus-ticket.{payload['ticket']}, "
+                      f"{NEGOTIATED_SUBPROTOCOL}"})
     task = asyncio.ensure_future(events_socket(fake))
     await asyncio.sleep(0.2)
     try:
         assert fake.accepted is True
         assert fake.close_code is None
         assert state.events.subscriber_count == 1
+        # The server negotiates a fixed, ticket-free subprotocol: real
+        # browsers fail the handshake when they offered protocols but the
+        # server selects none.
+        assert fake.accepted_subprotocol == NEGOTIATED_SUBPROTOCOL
+        assert payload["ticket"] not in (fake.accepted_subprotocol or "")
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_ws_without_fixed_offer_gets_plain_accept(db):
+    from backend.api.routes.events import NEGOTIATED_SUBPROTOCOL
+
+    settings = make_settings()
+    state, _ = make_state(db, settings)
+    app = create_app(settings, state=state)
+    payload = await _ticket(app)
+    # Non-browser clients offering only the ticket still connect; the
+    # server selects nothing rather than a protocol they did not offer.
+    fake = FakeWebSocket(
+        app, headers=_ws_ticket_headers(payload["ticket"]))
+    task = asyncio.ensure_future(events_socket(fake))
+    await asyncio.sleep(0.2)
+    try:
+        assert fake.accepted is True
+        assert fake.accepted_subprotocol is None
+        assert state.events.subscriber_count == 1
+        assert NEGOTIATED_SUBPROTOCOL not in (
+            fake.headers.get("sec-websocket-protocol", ""))
     finally:
         task.cancel()
         try:

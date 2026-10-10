@@ -45,6 +45,17 @@ class TicketBody(BaseModel):
     expires_at: str
 
 
+#: Fixed subprotocol the server selects when the client offered it.
+#: Browsers (per the WHATWG WebSocket standard) fail the connection when
+#: they offered subprotocols but the server selects none, so accepting
+#: without a selection would make real browsers unable to connect at all.
+#: The ticket itself is never echoed here: only this fixed, ticket-free
+#: name is negotiated. Clients must still present the ticket in the
+#: ``nexus-ticket.<ticket>`` request protocol; that is the only slot the
+#: server reads it from.
+NEGOTIATED_SUBPROTOCOL = "nexus-events"
+
+
 def _ticket_from_headers(websocket: WebSocket) -> str | None:
     """Extract the ticket from the subprotocol header, if present."""
     raw = websocket.headers.get("sec-websocket-protocol", "")
@@ -91,7 +102,20 @@ async def events_socket(websocket: WebSocket) -> None:
         # WebSocketException raised pre-accept into a 403 handshake
         # rejection (no socket, no ticket consumption).
         raise WebSocketException(code=4403)
-    await websocket.accept()
+    # Select the fixed subprotocol (never the ticket) when the client
+    # offered it: browsers fail the handshake when they offered protocols
+    # but the server selects none, and equally when the server selects one
+    # they did not offer. Non-browser clients that offer nothing still get
+    # a plain accept.
+    offered = {
+        entry.strip()
+        for entry in websocket.headers.get(
+            "sec-websocket-protocol", "").split(",")
+    }
+    selected = (
+        NEGOTIATED_SUBPROTOCOL if NEGOTIATED_SUBPROTOCOL in offered else None
+    )
+    await websocket.accept(subprotocol=selected)
     ticket = _ticket_from_headers(websocket)
     state = websocket.app.state.api
     if (

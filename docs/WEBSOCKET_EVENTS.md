@@ -13,15 +13,23 @@ and no replay: a process restart loses everything undelivered.
    UTC expiry (60 seconds by default, `NEXUS_API_TICKET_TTL_S`).
 2. Open `/api/v1/events/ws` within that window, presenting the
    ticket as a `Sec-WebSocket-Protocol` entry
-   `nexus-ticket.<ticket>` — the only accepted slot. In a browser:
+   `nexus-ticket.<ticket>` — the only accepted slot — alongside the
+   fixed `nexus-events` protocol, which is the name the server selects
+   in the handshake response. In a browser:
 
    ```js
    const {ticket} = await (await fetch("/api/v1/events/ticket",
      {method: "POST", headers: {Authorization: "Bearer " + token}}
    )).json();
    const ws = new WebSocket("ws://127.0.0.1:8000/api/v1/events/ws",
-     ["nexus-ticket." + ticket]);
+     ["nexus-ticket." + ticket, "nexus-events"]);
    ```
+   Both entries are required from browsers: browsers fail the handshake
+   when they offer subprotocols but the server selects none, so the
+   server answers with the fixed `nexus-events` name (and only when the
+   client offered it; otherwise the accept carries no selection). That name carries no
+   ticket material; the ticket itself is never echoed in the
+   negotiated protocol, responses, errors, or event payloads.
    Query-string tickets are not honored: server access logs record
    request paths including query strings, which would persist a
    bearer-equivalent credential outside the application's control.
