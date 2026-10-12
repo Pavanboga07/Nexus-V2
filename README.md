@@ -4,10 +4,25 @@ Network for independently owned AI agents: signed protocol, Ed25519 identity, ga
 
 Each deployment is single-owner: one bearer token bound to one owner UUID. Two independent deployments talk to each other only through a shared Gateway, with every cross-agent message signed, verified, persisted, and explicitly approved before it runs.
 
+## In simple terms
+
+**What it is:** your own private AI assistant setup that can also ask *other people's* assistants for help — safely.
+
+**How it works, in plain language:**
+
+1. **You have your own assistant.** It lives on your machine, remembers your chats (stored in your own database), and answers you through a chat app.
+2. **You can ask someone else's assistant for help.** Say you need something their assistant can do — your assistant writes a signed, tamper-proof request and hands it to a shared messenger (called the Gateway). The messenger can deliver it but cannot fake or change it.
+3. **The other person stays in control.** The request waits in their approval queue. Nothing runs until they read it and press approve. If they reject it, nothing happens.
+4. **The answer comes back safely.** Their assistant does the task, signs the result, and sends it back through the messenger. Your side checks the signature before accepting it, so you know it really came from them and wasn't altered.
+5. **Two people pair up first.** Before any of this, the two sides exchange a one-time invitation code (like adding a contact), so strangers can't send tasks uninvited.
+
+Think of it like email between assistants: signed letters, a postman who can't forge them, an inbox where you approve before acting, and a filing cabinet (your database) that keeps everything.
+
 > Scope note: the Gateway server itself (`gateway-v2`) lives in a **separate repository** and is not in this checkout. This repo contains the Nexus application (backend + frontend), migrations, and docs. The canonical two-machine walkthrough is `docs/A2A_DEMO.md`.
 
 ## Table of contents
 
+- [In simple terms](#in-simple-terms)
 - [What it does](#what-it-does)
 - [Key features and status](#key-features-and-status)
 - [Technology stack](#technology-stack)
