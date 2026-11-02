@@ -85,6 +85,7 @@ class ApiState:
     runtime: Any = None
     identities: Any = None
     gateway_clients: dict = field(default_factory=dict)
+    gateway_supervisors: dict = field(default_factory=dict)
     dispatchers: list = field(default_factory=list)
     worker: Any = None
     worker_task: Any = None
@@ -213,6 +214,7 @@ async def _open_optional(state: ApiState, settings: ApiSettings) -> None:
 async def _open_gateway_io(state: ApiState, settings: ApiSettings) -> None:
     """Connect gateway clients, dispatchers, receiver, worker (opt-in)."""
     from backend.gateway_client.client import GatewayClient
+    from backend.gateway_client.supervisor import GatewaySupervisor
     from backend.worker.config import WorkerConfig
     from backend.worker.outbox_dispatcher import OutboxDispatcher
 
@@ -227,6 +229,9 @@ async def _open_gateway_io(state: ApiState, settings: ApiSettings) -> None:
             provider.identity_for(agent_id), settings.gateway_url)
         await client.connect()
         state.gateway_clients[agent_id] = client
+        supervisor = GatewaySupervisor(client)
+        await supervisor.start()
+        state.gateway_supervisors[agent_id] = supervisor
 
         def _on_query(message, _hub=hub):
             _hub.publish(make_event(APPROVAL_REQUIRED, {
@@ -312,6 +317,12 @@ async def close_state(state: ApiState) -> None:
         except Exception:  # noqa: BLE001 - shutdown must not fail
             logger.warning("dispatcher shutdown failed")
     state.dispatchers.clear()
+    for supervisor in state.gateway_supervisors.values():
+        try:
+            await supervisor.stop()
+        except Exception:  # noqa: BLE001 - shutdown must not fail
+            logger.warning("gateway supervisor shutdown failed")
+    state.gateway_supervisors.clear()
     for client in state.gateway_clients.values():
         try:
             await client.close()

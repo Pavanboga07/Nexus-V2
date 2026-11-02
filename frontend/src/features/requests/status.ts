@@ -9,6 +9,7 @@ export const STATUS_LABELS: Record<RequestStatus, string> = {
   WAITING_APPROVAL: "Waiting approval",
   APPROVED: "Approved",
   PROCESSING: "Processing",
+  RECOVERABLE: "Needs recovery",
   COMPLETED: "Completed",
   REJECTED: "Rejected",
   EXPIRED: "Expired",
@@ -24,6 +25,7 @@ const STATUS_TONES: Record<RequestStatus, StatusTone> = {
   WAITING_APPROVAL: "pending",
   APPROVED: "pending",
   PROCESSING: "active",
+  RECOVERABLE: "bad",
   COMPLETED: "ok",
   REJECTED: "bad",
   EXPIRED: "bad",
@@ -56,6 +58,10 @@ export function canDecide(status: RequestStatus): boolean {
 
 export function canExecute(status: RequestStatus): boolean {
   return status === "APPROVED" || status === "PROCESSING";
+}
+
+export function canRecover(status: RequestStatus): boolean {
+  return status === "RECOVERABLE";
 }
 
 export function formatTime(value: string | null): string {

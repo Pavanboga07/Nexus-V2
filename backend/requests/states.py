@@ -17,6 +17,7 @@ DELIVERED = "DELIVERED"
 WAITING_APPROVAL = "WAITING_APPROVAL"
 APPROVED = "APPROVED"
 PROCESSING = "PROCESSING"
+RECOVERABLE = "RECOVERABLE"
 COMPLETED = "COMPLETED"
 REJECTED = "REJECTED"
 EXPIRED = "EXPIRED"
@@ -34,7 +35,14 @@ TRANSITIONS: dict[str, frozenset[str]] = {
         {APPROVED, REJECTED, FAILED, CANCELLED, EXPIRED}
     ),
     APPROVED: frozenset({PROCESSING, COMPLETED, FAILED, CANCELLED, EXPIRED}),
-    PROCESSING: frozenset({COMPLETED, FAILED, CANCELLED, EXPIRED}),
+    PROCESSING: frozenset(
+        {COMPLETED, FAILED, CANCELLED, EXPIRED, RECOVERABLE}
+    ),
+    # A recovery decision is explicit: retry goes back through APPROVED
+    # (so approval/peer/identity checks run again), or it terminates.
+    RECOVERABLE: frozenset(
+        {APPROVED, COMPLETED, FAILED, CANCELLED, EXPIRED}
+    ),
 }
 
 

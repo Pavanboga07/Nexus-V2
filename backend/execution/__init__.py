@@ -10,12 +10,21 @@ from .errors import (
     RequestNotApprovedError,
 )
 from .executor import RemoteExecutor
-from .models import COMPLETED, FAILED, IN_PROGRESS, ExecutionOutcome
+from .models import (
+    COMPLETED,
+    FAILED,
+    IN_PROGRESS,
+    RECOVERABLE,
+    ExecutionOutcome,
+)
+from .recovery import ExecutionRecoveryService
 
 __all__ = [
     "COMPLETED",
     "FAILED",
     "IN_PROGRESS",
+    "RECOVERABLE",
+    "ExecutionRecoveryService",
     "ApprovalMissingError",
     "ExecutionConflictError",
     "ExecutionError",

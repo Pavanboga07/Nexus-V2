@@ -204,6 +204,20 @@ export function executeRequest(
   );
 }
 
+export function recoverRequest(
+  baseUrl: string,
+  token: string,
+  requestId: string,
+  action: "retry" | "resolve",
+): Promise<RemoteRequest> {
+  return request<RemoteRequest>(
+    baseUrl,
+    token,
+    `/requests/${encodeURIComponent(requestId)}/recover`,
+    { method: "POST", body: JSON.stringify({ action }) },
+  );
+}
+
 export function issueTicket(baseUrl: string, token: string): Promise<Ticket> {
   return request<Ticket>(baseUrl, token, "/events/ticket", { method: "POST" });
 }

@@ -9,7 +9,7 @@ boundary.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -223,6 +223,23 @@ class ExecutionBody(StrictModel):
     executed: bool
     response_message_id: str | None = None
     detail: str = ""
+
+
+class RecoveryAction(StrictModel):
+    """Explicit operator decision for an expired execution claim."""
+
+    action: Literal["retry", "resolve"]
+
+
+class AuditEventBody(StrictModel):
+    """One safe, append-only fact from a request's operator timeline."""
+
+    event_type: str
+    actor_agent_id: str | None = None
+    request_id: str | None = None
+    message_id: str | None = None
+    created_at: datetime
+    meta: dict[str, Any] | None = None
 
 
 # -- serialization helpers -------------------------------------------------------

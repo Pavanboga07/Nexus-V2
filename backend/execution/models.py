@@ -13,6 +13,8 @@ COMPLETED = "COMPLETED"
 FAILED = "FAILED"
 #: Another attempt owns this request; nothing ran here.
 IN_PROGRESS = "IN_PROGRESS"
+#: The lease expired; an operator must retry or resolve explicitly.
+RECOVERABLE = "RECOVERABLE"
 
 
 @dataclass(frozen=True)

@@ -31,7 +31,11 @@ buffering is untouched by this component.
   `requested_capabilities` is JSONB, `query` is text, timestamps are
   `timestamptz`. Status is stored text; Component 5 owns transitions.
   `response_message_id` carries no foreign key (it would cycle
-  requests → messages → requests); Component 5 resolves it.
+  requests → messages → requests); Component 5 resolves it. Execution
+  lease columns (`execution_lease_owner/token/expires_at`,
+  `execution_heartbeat_at`, `execution_attempt`) are nullable so legacy
+  `PROCESSING` rows remain readable; a non-null expired lease is the
+  only signal that automatic recovery may inspect the row.
 - `messages` — one row per physical protocol message, keyed by
   protocol `message_id`. `request_id` references `remote_requests`
   (Component 1 requires it on every envelope). Sender/recipient are

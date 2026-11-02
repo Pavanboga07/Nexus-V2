@@ -13,6 +13,7 @@ from backend.requests.states import (
     FAILED,
     PROCESSING,
     QUEUED,
+    RECOVERABLE,
     REJECTED,
     SENT,
     TERMINAL,
@@ -31,6 +32,9 @@ HAPPY_PATH = [
     (WAITING_APPROVAL, APPROVED),
     (APPROVED, PROCESSING),
     (PROCESSING, COMPLETED),
+    (PROCESSING, RECOVERABLE),
+    (RECOVERABLE, APPROVED),
+    (RECOVERABLE, FAILED),
 ]
 
 
@@ -51,6 +55,9 @@ def test_illegal_transitions_fail():  # 2
         (WAITING_APPROVAL, COMPLETED),
         (APPROVED, "BOGUS_TARGET"),
         (PROCESSING, QUEUED),
+        (PROCESSING, APPROVED),
+        (RECOVERABLE, PROCESSING),
+        (RECOVERABLE, QUEUED),
         ("BOGUS", QUEUED),
     ]
     for current, target in illegal:
@@ -65,7 +72,7 @@ def test_illegal_transitions_fail():  # 2
 @pytest.mark.parametrize(
     "target",
     [CREATED, QUEUED, SENT, DELIVERED, WAITING_APPROVAL, APPROVED,
-     PROCESSING, COMPLETED],
+     PROCESSING, RECOVERABLE, COMPLETED],
 )
 def test_terminal_states_cannot_be_resurrected(terminal, target):  # 3
     assert is_terminal(terminal)

@@ -45,6 +45,7 @@ export type RequestStatus =
   | "WAITING_APPROVAL"
   | "APPROVED"
   | "PROCESSING"
+  | "RECOVERABLE"
   | "COMPLETED"
   | "REJECTED"
   | "EXPIRED"

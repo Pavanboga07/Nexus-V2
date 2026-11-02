@@ -63,6 +63,8 @@ def test_openapi_matches_implemented_routes():
         "/api/v1/requests/{request_id}/approve",
         "/api/v1/requests/{request_id}/reject",
         "/api/v1/requests/{request_id}/execute",
+        "/api/v1/requests/{request_id}/recover",
+        "/api/v1/requests/{request_id}/events",
     }
     assert expected <= paths
     # No WebSocket event stream or frontend route exists.

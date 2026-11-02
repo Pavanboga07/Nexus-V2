@@ -17,7 +17,13 @@ capability policy — "is this the recipient?" yes;
 ```text
 CREATED → QUEUED → SENT → DELIVERED → WAITING_APPROVAL → APPROVED
     → PROCESSING → COMPLETED
+              ↘ RECOVERABLE → APPROVED (explicit retry)
+                            → FAILED   (operator resolve)
 ```
+
+`PROCESSING → RECOVERABLE` is written only when its execution lease has
+expired; a live lease is never stolen. Recovery is an explicit operator
+decision (see `docs/REMOTE_EXECUTION.md`), never an automatic retry.
 
 Terminal: `REJECTED`, `EXPIRED`, `FAILED`, `CANCELLED`, `COMPLETED`.
 `CREATED` is the pre-commit concept; rows are born `QUEUED` once

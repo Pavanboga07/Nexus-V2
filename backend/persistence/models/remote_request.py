@@ -12,7 +12,15 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -64,6 +72,24 @@ class RemoteRequest(Base):
     # request_id). Component 5 only preserves the value.
     conversation_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True
+    )
+    # Execution lease: set on APPROVED -> PROCESSING, cleared on
+    # finalization. An expired non-null lease is the only signal that a
+    # PROCESSING row may be recovered; it never auto-retries work.
+    execution_lease_owner: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    execution_lease_token: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    execution_lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    execution_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    execution_attempt: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
     )
 
     __table_args__ = (

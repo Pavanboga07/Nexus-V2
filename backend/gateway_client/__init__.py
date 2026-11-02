@@ -14,9 +14,12 @@ from .errors import (
     NotConnectedError,
 )
 from .models import AckResult, ClientConfig, ConnectionState
+from .supervisor import GatewaySupervisor, SupervisorConfig
 
 __all__ = [
     "GatewayClient",
+    "GatewaySupervisor",
+    "SupervisorConfig",
     "AckResult",
     "ClientConfig",
     "ConnectionState",

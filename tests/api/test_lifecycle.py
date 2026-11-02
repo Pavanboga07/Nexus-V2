@@ -105,6 +105,8 @@ async def test_gateway_io_wiring_lifecycle(db, tmp_path):
             from backend.gateway_client.models import ConnectionState
 
             assert client.state is ConnectionState.CONNECTED
+            supervisor = state.gateway_supervisors[identity.agent_id]
+            assert supervisor.running
             assert len(state.dispatchers) == 1
             dispatcher, task, receiver = state.dispatchers[0]
             assert dispatcher.running
@@ -116,11 +118,13 @@ async def test_gateway_io_wiring_lifecycle(db, tmp_path):
         finally:
             await close_state(state)
         assert state.gateway_clients == {}
+        assert state.gateway_supervisors == {}
         assert state.dispatchers == []
         assert state.worker is None
         assert state.worker_task is None
         assert client.state is not ConnectionState.CONNECTED
         assert not dispatcher.running
+        assert not supervisor.running
     finally:
         await server.stop()
 

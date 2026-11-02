@@ -21,11 +21,13 @@ own machine with outbound access to it.
 
 1. In the Render dashboard: New → Web Service → select the
    `gateway-v2` repository.
-2. **Branch:** select `fix/gateway-render-compat` (it carries the
-   `/healthz` endpoint; `main` predates it).
+2. **Branch:** select `main`. It carries `/healthz`, the protocol-version
+   field, and the signed-handshake smoke command.
 3. Build command:
    ```bash
-   pip install "nexus-v2 @ git+https://github.com/Pavanboga07/Nexus-V2.git@573c1a82e831371c653afe9e7102bb8a437c040a" --no-deps && pip install -e .
+   pip install --no-deps "nexus-v2 @ git+https://github.com/Pavanboga07/Nexus-V2.git@61b05acd0895656769e9ed7469839ebe48add4bc" && \
+   pip install --no-deps -e . && \
+   pip install cryptography==46.0.5 websockets==17.2
    ```
 4. Start command (bind `0.0.0.0`; the `127.0.0.1` default is
    unreachable from Render's proxy and the deploy will hang):
@@ -38,6 +40,11 @@ own machine with outbound access to it.
    `https://nexus-gateway-xxxx.onrender.com`. Both Nexus backends use
    `wss://nexus-gateway-xxxx.onrender.com` (TLS terminates at Render;
    the Ed25519 handshake still runs end-to-end inside it).
+7. Run the deploy smoke from the gateway checkout:
+   ```bash
+   python -m gateway.smoke --url wss://nexus-gateway-xxxx.onrender.com
+   ```
+   It checks the published protocol version and a real signed handshake.
 
 Free-plan notes: the service sleeps after ~15 minutes idle and every
 restart loses buffered mail and replay state (in-memory by design).
@@ -173,7 +180,6 @@ GatewayClient at startup (`_open_gateway_io`).
 | `HEAD /` tracebacks in Gateway logs | Fixed in current `main`: plain-HTTP probes get clean `404` JSON, upgrades proceed normally |
 | Response never completes A | B's worker running; A still `SENT`; check B's request reached `COMPLETED` first |
 | Render deploy unhealthy | Health Check Path must be `/healthz`; start command must bind `0.0.0.0 --port $PORT` |
-| `HEAD /` tracebacks in Gateway logs | Only on builds predating the `main` HEAD-handling fix; current code answers clean `404` JSON |
 
 ## 7. Automated proof
 

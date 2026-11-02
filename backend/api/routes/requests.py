@@ -25,12 +25,16 @@ from backend.api.events import (
 from backend.provider_config.errors import ProviderConfigError
 from backend.api.schemas import (
     ApprovalAction,
+    AuditEventBody,
     ExecutionBody,
+    RecoveryAction,
     RequestBody,
     RequestCreate,
     request_body,
 )
 from backend.execution.executor import RemoteExecutor
+from backend.execution.recovery import ExecutionRecoveryService
+from backend.persistence.repositories.audit_events import AuditEventRepository
 from backend.persistence.repositories.messages import MessageRepository
 from backend.persistence.repositories.remote_requests import (
     RemoteRequestRepository,
@@ -311,3 +315,72 @@ async def execute_request(
         response_message_id=outcome.response_message_id,
         detail=outcome.record.status,
     )
+
+
+@router.post("/requests/{request_id}/recover", response_model=RequestBody)
+async def recover_request(
+    request_id: str,
+    body: RecoveryAction,
+    request: Request,
+    settings=Depends(deps.authenticate),
+) -> RequestBody:
+    """Resolve or explicitly retry an expired execution claim.
+
+    ``retry`` returns the request to ``APPROVED`` so the normal executor
+    re-verifies every precondition before running. ``resolve`` records
+    a terminal failure without running anything. A live lease is never
+    stolen.
+    """
+    state = deps.state_of(request)
+    record = await deps.request_involving_caller(
+        state.sessions, settings.owner_user_id, request_id)
+    owned = await deps.owned_agent_ids(
+        state.sessions, settings.owner_user_id)
+    if record.recipient_agent_id not in owned:
+        raise ApiError(403, "FORBIDDEN",
+                       "not authorized for this resource")
+    try:
+        updated = await ExecutionRecoveryService(state.sessions).recover(
+            request_id,
+            record.recipient_agent_id,
+            retry=body.action == "retry",
+        )
+    except RequestServiceError as exc:
+        raise to_api_error(exc)
+    state.events.publish(make_event(REQUEST_UPDATED, {
+        "request_id": updated.request_id,
+        "status": updated.status,
+    }))
+    return request_body(updated)
+
+
+@router.get(
+    "/requests/{request_id}/events", response_model=list[AuditEventBody]
+)
+async def list_request_events(
+    request_id: str,
+    request: Request,
+    settings=Depends(deps.authenticate),
+    limit: int = 100,
+    offset: int = 0,
+) -> list[AuditEventBody]:
+    """Append-only operator timeline for one request (safe metadata)."""
+    if not 1 <= limit <= 200 or offset < 0 or offset > 1000:
+        raise ApiError(422, "INVALID_INPUT", "request input is invalid")
+    state = deps.state_of(request)
+    await deps.request_involving_caller(
+        state.sessions, settings.owner_user_id, request_id)
+    async with state.sessions() as session:
+        events = await AuditEventRepository(session).list_by_request(
+            request_id, limit=limit, offset=offset)
+    return [
+        AuditEventBody(
+            event_type=event.event_type,
+            actor_agent_id=event.actor_agent_id,
+            request_id=event.request_id,
+            message_id=event.message_id,
+            created_at=event.created_at,
+            meta=event.meta,
+        )
+        for event in events
+    ]

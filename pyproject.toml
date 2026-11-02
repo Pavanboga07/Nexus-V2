@@ -24,6 +24,10 @@ dependencies = [
     # Pinned exactly: signature bytes must verify identically everywhere.
     "cryptography==46.0.5",
     # Component 3: Gateway persistent WebSocket transport.
+    # The application stays on 16.x because langgraph-sdk 0.4.5 declares
+    # websockets<17. The standalone relay intentionally pins 17.2 for
+    # clean HEAD/plain-HTTP probe parsing. The wire protocol is
+    # version-independent; see docs/DEPENDENCY_POLICY.md.
     "websockets==16.1.1",
     # Component 4: PostgreSQL persistence (async SQLAlchemy + Alembic).
     "SQLAlchemy==2.0.35",

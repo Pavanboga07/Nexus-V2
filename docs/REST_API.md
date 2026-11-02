@@ -47,7 +47,8 @@ against durable rows:
 - Conversations: the conversation's agent must be owned (derived
   server-side from the conversation row, never from caller input).
 - Requests: the sender or the recipient side must be owned; approve,
-  reject, and execute additionally require the *recipient* side.
+  reject, execute, and recover additionally require the *recipient*
+  side.
 - Unknown and unowned resources are indistinguishable (`404`), so
   existence never leaks across ownership boundaries.
 
@@ -76,7 +77,9 @@ Interactive schema: `GET /api/docs` (Swagger UI), raw OpenAPI:
 | `GET /approvals/pending` | Inbound `WAITING_APPROVAL` requests for owned agents |
 | `POST /requests/{id}/approve` | Approve as the persisted recipient (`reason` optional) |
 | `POST /requests/{id}/reject` | Reject as the persisted recipient |
-| `POST /requests/{request_id}/execute` | Run the Component 10 executor after its own re-verification; reports `COMPLETED`, `FAILED`, or live-claim `IN_PROGRESS` |
+| `POST /requests/{request_id}/execute` | Run the Component 10 executor after its own re-verification; reports `COMPLETED`, `FAILED`, live-claim `IN_PROGRESS`, or `RECOVERABLE` after lease expiry |
+| `POST /requests/{request_id}/recover` | Recipient-only explicit recovery: `{"action":"retry"}` returns to `APPROVED`; `{"action":"resolve"}` terminates `FAILED` |
+| `GET /requests/{request_id}/events` | Append-only request audit timeline (safe metadata; bounded `limit`/`offset`) |
 | `POST /events/ticket` | Spend REST auth for one single-use WebSocket ticket (+ expiry) |
 | `WS /events/ws` | Authenticated event stream (`Sec-WebSocket-Protocol: nexus-ticket.<ticket>` only; see `docs/WEBSOCKET_EVENTS.md`) |
 

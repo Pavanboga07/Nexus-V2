@@ -18,7 +18,7 @@ Each deployment is single-owner: one bearer token bound to one owner UUID. Two i
 
 Think of it like email between assistants: signed letters, a postman who can't forge them, an inbox where you approve before acting, and a filing cabinet (your database) that keeps everything.
 
-> Scope note: the Gateway server itself (`gateway-v2`) lives in a **separate repository** and is not in this checkout. This repo contains the Nexus application (backend + frontend), migrations, and docs. The canonical two-machine walkthrough is `docs/A2A_DEMO.md`.
+> Scope note: the Gateway server itself (`gateway-v2`) lives in a **separate sibling repository** and is not vendored in this checkout. This repo contains the Nexus application (backend + frontend), migrations, and docs, and declares the gateway's pinned protocol dependency. The canonical two-machine walkthrough is `docs/A2A_DEMO.md`.
 
 ## Table of contents
 
@@ -63,11 +63,13 @@ Legend: **Implemented** = in code and supported by config/tests. **Partial** = w
 |---|---|---|
 | Signed wire protocol (v1.0, 7 message types, canonical JSON) | **Implemented** | `backend/protocol/`, `docs/PROTOCOL.md`, `tests/protocol/` (64 tests) |
 | Ed25519 identity (key gen, `agent_<sha256(pub)>`, sign/verify, in-mem replay) | **Implemented** | `backend/identity/`, `docs/IDENTITY.md`, `tests/identity/` (55 tests, 148 passed with protocol on Python 3.12.10) |
-| PostgreSQL persistence (agents, peers, requests, messages, outbox, approvals, conversations, audit, provider creds, pairing) | **Implemented** | `backend/persistence/`, `alembic/versions/` (4 revisions), `docs/PERSISTENCE.md` |
-| Request lifecycle (`QUEUED → SENT → … → WAITING_APPROVAL → APPROVED → PROCESSING → COMPLETED`, terminal `REJECTED/EXPIRED/FAILED/CANCELLED`) | **Implemented** | `backend/requests/`, `docs/REQUEST_SERVICE.md` |
+| PostgreSQL persistence (agents, peers, requests, messages, outbox, approvals, conversations, audit, provider creds, pairing) | **Implemented** | `backend/persistence/`, `alembic/versions/` (5 revisions), `docs/PERSISTENCE.md` |
+| Request lifecycle (`QUEUED → SENT → … → WAITING_APPROVAL → APPROVED → PROCESSING → COMPLETED`, with `PROCESSING → RECOVERABLE` on lease expiry; terminal `REJECTED/EXPIRED/FAILED/CANCELLED`) | **Implemented** | `backend/requests/`, `backend/execution/`, `docs/REQUEST_SERVICE.md` |
 | Outbox + Gateway client (claim with `SKIP LOCKED`, leases, correlated ACKs, 1 MiB send cap, graded `SENT/RETRYABLE/PERMANENT/UNCERTAIN`) | **Implemented** | `backend/worker/`, `backend/gateway_client/`, `docs/WORKER.md` |
+| Supervised Gateway sockets (idle/remote-close reconnect with jittered exponential backoff, clean shutdown) | **Implemented** | `backend/gateway_client/supervisor.py`, `tests/gateway_client/test_supervisor.py` |
 | Inbound `REMOTE_QUERY` registration (verify vs stored key + `connected` peer, idempotent, `WAITING_APPROVAL`) | **Implemented** | `backend/inbound/`, `docs/INBOUND.md` |
 | Approved remote execution (re-verifies approval/peer/expiry/key, 10 s expiry margin, atomic signed response + outbox) | **Implemented** | `backend/execution/`, `docs/REMOTE_EXECUTION.md` |
+| Execution leases + explicit operator recovery (`PROCESSING → RECOVERABLE`, fencing token at finalize, retry/resolve API, request audit timeline) | **Implemented** | `backend/execution/lease.py`, `backend/execution/recovery.py`, `docs/REMOTE_EXECUTION.md` |
 | Originating-side response reception | **Implemented** | `backend/responses/`, `tests/responses/` |
 | Versioned REST API at `/api/v1` (8 routers, `/api/docs`, `/api/openapi.json`) | **Implemented** | `backend/api/`, `docs/REST_API.md` |
 | Authenticated WebSocket events (single-use ticket + `nexus-events` subprotocol, 100-deep hub, no replay) | **Implemented** | `backend/api/events.py`, `backend/api/routes/events.py`, `docs/WEBSOCKET_EVENTS.md` |
@@ -77,8 +79,8 @@ Legend: **Implemented** = in code and supported by config/tests. **Partial** = w
 | Owner-scoped provider credentials (Fernet-encrypted, only `google_genai` verified in code) | **Partial** | `backend/provider_config/` — `SUPPORTED_PROVIDERS = {"google_genai": "Google Gemini"}`; `model_factory` can `init_chat_model` other providers if their `langchain-*` package is installed, but only the Gemini path is asserted in this repo |
 | React frontend (chat, remote requests, approvals + approve-and-run, agents/network, AI-provider settings, live events) | **Implemented** | `frontend/`, `frontend/README.md` (unit tests mocked; E2E needs live backend + PG) |
 | Two-machine A2A demo (hosted Gateway + deterministic or Gemini model) | **Implemented** (procedure, not automation) | `docs/A2A_DEMO.md`, `tests/a2a/` (deterministic-model proof; hosted-gateway test skips unless `NEXUS_TEST_GATEWAY_URL` is set) |
-| Gateway server | **External** — separate `gateway-v2` repo, not in this checkout | `docs/A2A_DEMO.md` §1 |
-| CI workflow | **Not present** — no `.github/`, no `*.yaml` CI found | — |
+| Gateway server | **External** — separate sibling `gateway-v2` repo; pinned as a dependency | `docs/A2A_DEMO.md` §1 |
+| CI workflow | **Implemented** — `.github/workflows/ci.yml` (Postgres backend + frontend) | `.github/workflows/ci.yml` |
 | Multi-user accounts, token streaming, cross-worker event fan-out | **Not implemented** (single-owner by design) | `backend/api/settings.py`, `frontend/README.md` known limits |
 
 ## Technology stack
@@ -88,13 +90,17 @@ Backend (`pyproject.toml`, `nexus-v2 0.8.0`, `requires-python >=3.10`):
 | Layer | Packages (pinned) |
 |---|---|
 | Identity + credential crypto | `cryptography==46.0.5` (Ed25519 + Fernet) |
-| Gateway transport | `websockets==16.1.1` |
+| Gateway transport | `websockets==16.1.1` (application runtime; the relay independently pins `17.2` for HEAD probe parsing) |
 | Persistence | `SQLAlchemy==2.0.35`, `asyncpg==0.29.0`, `alembic==1.13.0`, PostgreSQL 16 (`docker-compose.yml`, `postgres:16-alpine`) |
 | Agent runtime | `langgraph==1.2.12`, `langchain==1.4.4`, `langchain-core==1.6.9` |
 | MCP | `langchain[mcp]==1.4.4`, `fastmcp==4.1.0` |
 | REST API | `fastapi==0.143.0`, `uvicorn==0.54.0` |
 | Tests | `pytest>=8`, `pytest-asyncio==0.24.0`, `httpx==0.27.2` (`pip install -e ".[test]"`) |
 | Optional providers | e.g. `langchain-google-genai` for the verified Gemini path; other `langchain-*` provider packages per `NEXUS_LLM_MODEL=provider:model-id` (unverified here) |
+
+The application and relay intentionally pin different `websockets`
+versions. Why they differ, and how to bump them safely, is documented
+in [`docs/DEPENDENCY_POLICY.md`](docs/DEPENDENCY_POLICY.md).
 
 Frontend (`frontend/package.json`, `nexus-frontend 0.1.0`):
 
@@ -183,7 +189,7 @@ Lifespan (`build_production_state`) opens, in order: engine → session factory 
 - **Local turn:** `POST /conversations/{id}/turns` → `authenticate` → ownership check → `effective_runtime(owner)` (saved DB creds win over startup runtime) → `ConversationService.submit_turn` (load agent+conversation+history → run model → atomically persist user+agent messages) → `conversation.turn.completed`.
 - **Outbound remote:** `POST /requests` → `RequestService.create_remote_request` (validate → peer `connected`? → build + sign `REMOTE_QUERY` → atomic `QUEUED + message + outbox PENDING`) → worker claims (`SKIP LOCKED`) → verifies → `GatewayClient.send_message` → ACK `DELIVERED`/`BUFFERED` → `QUEUED → SENT`.
 - **Inbound:** Gateway `DELIVER(REMOTE_QUERY)` → `InboundDispatcher` → `InboundProcessor.process` (recipient is me → sender known + `connected` (or `nexus.pair` bootstrap burning an invitation) → verify vs stored key → atomic `WAITING_APPROVAL + message + audit`) → `remote.request.approval_required`.
-- **Approve + execute:** recipient-only `POST /requests/{id}/approve` (`WAITING_APPROVAL → APPROVED`) → `POST /requests/{id}/execute` (claims `APPROVED → PROCESSING`, re-verifies everything, runs `runtime.run(query, history=None)` so remote caps never widen tools, atomically stores signed `REMOTE_RESPONSE + outbox + COMPLETED/FAILED`) → worker delivers the answer.
+- **Approve + execute:** recipient-only `POST /requests/{id}/approve` (`WAITING_APPROVAL → APPROVED`) → `POST /requests/{id}/execute` (claims `APPROVED → PROCESSING` under a lease, re-verifies everything, runs `runtime.run(query, history=None)` so remote caps never widen tools, atomically stores signed `REMOTE_RESPONSE + outbox + COMPLETED/FAILED`) → worker delivers the answer. A heartbeat extends the lease while the runtime works; an expired claim becomes `RECOVERABLE` and is only retried or resolved by explicit operator action at `POST /requests/{id}/recover`.
 - **Answer home:** `DELIVER(REMOTE_RESPONSE)` → `ResponseReceiver` → `RequestService.handle_remote_response` (parties mirror, state is `SENT`/`APPROVED`/`PROCESSING`, verify vs stored responder key) → `COMPLETED`/`FAILED` → `remote.response.received`.
 
 ## Repository structure
@@ -213,7 +219,7 @@ Lifespan (`build_production_state`) opens, in order: engine → session factory 
 │   ├── src/lib/api/          # client.ts, endpoints.ts (mirrors /api/v1), types.ts
 │   ├── src/lib/websocket/    # useEventStream.ts (ticket subprotocol, backoff, REST resync)
 │   └── e2e/                  # Playwright specs + seed.py (needs live backend + PG)
-├── alembic/                  # env.py (async) + versions/: c4init0001 → c50002 → c60003 → c70004
+├── alembic/                  # env.py (async) + versions/: c4init0001 → c50002 → c60003 → c70004 → c80005
 ├── config/
 │   └── mcp_servers.example.json  # operator MCP example (no secrets, no prod endpoints)
 ├── docs/                     # 12 component guides; start with docs/A2A_DEMO.md
@@ -228,7 +234,7 @@ Lifespan (`build_production_state`) opens, in order: engine → session factory 
 └── .env.example              # copy to .env; dev defaults only, never secrets
 ```
 
-`gateway-v2` is intentionally absent here — it is deployed separately (see the A2A summary below).
+The gateway is a **separate sibling repository**, not vendored here. It is a required service for cross-instance transport, and its protocol/identity dependency is pinned to this distribution.
 
 ## Prerequisites
 
@@ -236,7 +242,7 @@ Lifespan (`build_production_state`) opens, in order: engine → session factory 
 - **PostgreSQL:** 16 reachable at `127.0.0.1:5432` by default. The repo ships only the database container; the API and frontend run on the host.
 - **Docker Compose** for the one-command database (`docker compose up -d`).
 - **Node.js 22+ and npm 10+** for the frontend (per `frontend/README.md`).
-- **Git checkout** of this repo on `main` (`b73177e` at time of writing; history: first commit → Components 10–14 → two A2A PRs).
+- **Git checkout** of this repo on `main` (`61b05ac` at audit time); the sibling `gateway-v2` repo is on `main` (`b1a24d9`).
 - **No Gateway checkout needed** for local chat/persistence work; cross-instance work needs the hosted `gateway-v2` URL.
 
 ## Installation
@@ -256,7 +262,7 @@ docker compose up -d
 cp .env.example .env
 # edit .env only for local DB tweaks; auth/model keys are exported per-shell (see Configuration)
 
-# 5. Migrate to head (c4init0001 → c70004)
+# 5. Migrate to head (c4init0001 → c80005)
 python -m alembic upgrade head
 
 # 6. Frontend deps (separate terminal when needed)
@@ -323,8 +329,8 @@ The UI deliberately uses **no `VITE_*` variables**: the token lives in tab-scope
 ## Database and migrations
 
 - Engine: async SQLAlchemy + `asyncpg`, `pool_pre_ping`, `expire_on_commit=False`, short `session_scope()` transactions (commit-or-rollback), `SELECT … FOR UPDATE` + `SKIP LOCKED` for outbox/request claims.
-- 13 tables: `users`, `agents` (no secret column — asserted in tests), `agent_peers` (directed, unique, no-self), `remote_requests` (+ `conversation_id`, no FK), `messages` (wire minus `signature` in `envelope` JSONB + `signature`), `outbox_messages` (`PENDING/PROCESSING/SENT/FAILED/UNCERTAIN` + claim token/lease), `approvals` (one row per request), `conversations`, `conversation_messages` (`user/agent/system`), `audit_events` (append-only facts), `provider_credentials` (PK `owner_user_id`, Fernet blob only), `pair_invitations` (hash, never secret), `pair_links`.
-- Revisions (`alembic/versions/`): `c4init0001_initial_schema` (9 tables) → `c50002_outbox` (+ `outbox_messages`, `remote_requests.conversation_id`) → `c60003_outbox_leases` (+ claim token/lease/`UNCERTAIN`) → `c70004_provider_pairing` (+ `provider_credentials`, `pair_invitations`, `pair_links`).
+- 13 tables: `users`, `agents` (no secret column — asserted in tests), `agent_peers` (directed, unique, no-self), `remote_requests` (+ `conversation_id`, execution lease/fencing fields, no FK for response id), `messages` (wire minus `signature` in `envelope` JSONB + `signature`), `outbox_messages` (`PENDING/PROCESSING/SENT/FAILED/UNCERTAIN` + claim token/lease), `approvals` (one row per request), `conversations`, `conversation_messages` (`user/agent/system`), `audit_events` (append-only facts), `provider_credentials` (PK `owner_user_id`, Fernet blob only), `pair_invitations` (hash, never secret), `pair_links`.
+- Revisions (`alembic/versions/`): `c4init0001_initial_schema` (9 tables) → `c50002_outbox` (+ `outbox_messages`, `remote_requests.conversation_id`) → `c60003_outbox_leases` (+ claim token/lease/`UNCERTAIN`) → `c70004_provider_pairing` (+ `provider_credentials`, `pair_invitations`, `pair_links`) → `c80005_execution_leases` (+ execution lease/fencing/heartbeat/attempt columns).
 
 ```bash
 docker compose up -d
@@ -370,7 +376,7 @@ All commands verified against `pyproject.toml`, `frontend/package.json`, `alembi
 | `python -m pytest tests/protocol tests/identity -q` | No-DB contract + crypto suite | **148 passed in ~0.5 s** |
 | `python -m pytest tests/ -q` | Full backend suite (96 files) | Needs live PG (`NEXUS_TEST_DATABASE_URL`, default `…/nexus_test`); **not run here** — no `pg_isready`/server was available, so DB-backed suites (persistence, worker, a2a, most of api) are **unverified in this pass** |
 | `python -m pytest tests/a2a/ -q` | Deterministic two-instance proof (real sockets/signatures/workers, no hosted GW) | Needs PG + deps; documented in `docs/A2A_DEMO.md`, not run here |
-| `python -m alembic upgrade head` | Applies `c4init0001 → c70004` | Needs PG; not run here (no server) |
+| `python -m alembic upgrade head` | Applies `c4init0001 → c80005` | Needs PG; not run here (no server) |
 | `python -m backend.api --host 127.0.0.1 --port 8000` | Serves the API (entry in `backend/api/__main__.py`) | Import check passed (`ApiSettings.from_env({})` → `auth_configured=False`, `127.0.0.1:8000`); live serve needs PG |
 | `cd frontend && npm install` | Installs React/Vite/Playwright toolchain | Required; `node_modules/` absent here so `npm run …` below are **unverified in this pass** but match `package.json` verbatim |
 | `npm run dev` | Vite `:5173`, `/api → NEXUS_DEV_API ?? :8000` (HTTP+WS, `changeOrigin:false`) | Per `vite.config.ts` + `frontend/README.md` |
@@ -380,7 +386,7 @@ All commands verified against `pyproject.toml`, `frontend/package.json`, `alembi
 | `npm run test:e2e` | `playwright test` vs preview + live backend (`nexus_frontend_e2e`, `e2e-frontend-token`, owner `11111111-…`) with `frontend/e2e/seed.py` | Same; asserts honest unconfigured-model states where creds are missing |
 | `npm run typecheck` / `npm run lint` | Both are `tsc --noEmit` | Same (no separate ESLint config) |
 
-No CI workflow exists to run any of the above automatically.
+CI (`.github/workflows/ci.yml`) runs the backend suite against PostgreSQL and the frontend typecheck, unit tests, and production build.
 
 ## API reference
 
@@ -403,6 +409,8 @@ Base prefix is `/api/v1` for all routers (`backend/api/app.py`); interactive doc
 | `POST` | `/api/v1/requests/{request_id}/approve` | Bearer | `{reason?}`, recipient-only |
 | `POST` | `/api/v1/requests/{request_id}/reject` | Bearer | `{reason?}`, recipient-only |
 | `POST` | `/api/v1/requests/{request_id}/execute` | Bearer | `APPROVED`/`PROCESSING` → `{status, executed, response_message_id}` |
+| `POST` | `/api/v1/requests/{request_id}/recover` | Bearer | `{action: "retry"\|"resolve"}`, recipient-only; live leases are never stolen |
+| `GET` | `/api/v1/requests/{request_id}/events` | Bearer | Append-only audit timeline (safe metadata) |
 | `POST` | `/api/v1/events/ticket` | Bearer | Single-use WS ticket (`expires_at`) |
 | `WS` | `/api/v1/events/ws` | Ticket subprotocol | `Sec-WebSocket-Protocol: nexus-ticket.<ticket>, nexus-events`; server selects `nexus-events`; streams `{event_id, type, timestamp, data}` |
 | `GET` | `/api/v1/settings/ai-provider` | Bearer | `{configured, provider?, model?, updated_at?}` (never the key) |
@@ -450,7 +458,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 
 Full checklist: `docs/A2A_DEMO.md`. Essence:
 
-1. Deploy `gateway-v2` (branch `fix/gateway-render-compat`, `/healthz` check, `python -m gateway --host 0.0.0.0 --port $PORT`) and note the `wss://…` URL. Free-tier sleeps lose buffered mail — run start-to-finish in one session.
+1. Deploy `gateway-v2` (branch `main`, `/healthz` check, `python -m gateway --host 0.0.0.0 --port $PORT`, pinned Nexus protocol/identity SHA in `render.yaml`) and note the `wss://…` URL. Run `python -m gateway.smoke --url wss://…` after deploy. Free-tier sleeps lose buffered mail — run start-to-finish in one session.
 2. Per machine (isolated DBs, distinct owners/tokens/keys): migrate, create owner UUID + token + one owned agent + `NEXUS_API_IDENTITY_KEYS_PATH` JSON (`0600`).
 3. Provider per machine: UI Settings → AI Provider (Gemini + `NEXUS_API_CREDENTIAL_KEY`) or `NEXUS_LLM_MODEL='deterministic:demo'` + `NEXUS_LLM_ALLOW_DETERMINISTIC=1`.
 4. Both backends with `NEXUS_API_GATEWAY_URL=wss://…` + `NEXUS_API_ENABLE_GATEWAY_IO=1`; frontends via `NEXUS_DEV_API` overrides if sharing hardware.
@@ -460,11 +468,11 @@ Full checklist: `docs/A2A_DEMO.md`. Essence:
 
 - Single-owner bearer auth only; no teams, roles, or per-agent tokens. Two API workers do not share WebSocket delivery — run one API process per owner or accept split delivery (REST stays canonical).
 - Gateway is in-memory: `BUFFERED` mail and replay state are lost on restart; `DELIVERED`/`BUFFERED` ACKs mean handoff, never execution. `UNCERTAIN` outbox rows are never auto-retried and need operator attention.
-- `PROCESSING` is sticky: a crash mid-execution surfaces as `IN_PROGRESS` on retry, not a re-run. `COMPLETED`/`FAILED` replays return `executed=False`.
+- `PROCESSING` is sticky while its lease is live: a concurrent or early retry surfaces as `IN_PROGRESS`, not a re-run. If the lease expires (crash/partition), the next execution call or recovery request marks `RECOVERABLE`; an operator must choose `retry` (back through `APPROVED`, full re-verification, explicit duplicate-risk) or `resolve` (terminal `FAILED`). `COMPLETED`/`FAILED` replays return `executed=False`.
 - Execution runs the recipient model with `history=None` and the recipient’s allowlist tools only; remote `requested_capabilities` never widen tool access (narrower per-request subsets are future work per `docs/MCP.md`).
 - Only `google_genai` is an accepted `provider` in `provider_config/service.py`; other `provider:model` strings need their `langchain-*` package plus code-level allowlisting. No token streaming endpoint; chat shows a spinner until the turn HTTP response arrives.
 - `docs/A2A_DEMO.md` non-goals apply: LLM answer quality, two-machine networking inside tests, and production hardening (single-owner, in-proc hub, unbounded retry notes, no MCP cap) are explicitly out of scope.
-- No `LICENSE` file and no CI workflow ship in this checkout — confirm reuse/verification policy before distributing or deploying beyond demos.
+- No `LICENSE` file ships in this checkout — confirm reuse policy before distributing. CI is defined in `.github/workflows/ci.yml`; it does not run Playwright E2E (that still needs a seeded backend).
 
 ## Troubleshooting
 
@@ -487,7 +495,7 @@ Backend logs association: `nexus.api` (startup/shutdown + `close_state` warns), 
 
 ## Contributing
 
-No contributing guide or CI ships with this checkout (verified: no `.github/`, no `CONTRIBUTING.md`). Sensible defaults until one is added:
+No contributing guide ships with this checkout. CI is in `.github/workflows/ci.yml`. Sensible defaults until a guide is added:
 
 1. Create a feature branch from `main`; keep Gateway changes in `gateway-v2`.
 2. Add/extend `tests/` alongside behavior (backend: `python -m pytest tests/ -q` against PG; frontend: `npm test` + `npm run typecheck`).

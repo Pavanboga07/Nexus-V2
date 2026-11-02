@@ -22,15 +22,19 @@ Crash policy (no blind retries, no exactly-once claims):
 5. after recording, before outbox delivery — the existing worker
    delivers; repeated calls replay the stored response id.
 
-``PROCESSING`` never auto-advances here, and ``FAILED`` is terminal:
-reprocessing requires operator action outside this component.
+A live ``PROCESSING`` lease is never stolen. When it expires, the row
+becomes ``RECOVERABLE`` and stops there: retry or resolution is an
+explicit operator action (`ExecutionRecoveryService`), never an
+automatic re-run. ``FAILED`` remains terminal.
 """
 
 from __future__ import annotations
 
+import asyncio
 import functools
+import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.exc import OperationalError, TimeoutError as SQLTimeoutError
@@ -47,6 +51,7 @@ from backend.persistence.database import session_scope
 from backend.persistence.errors import ConflictError
 from backend.persistence.repositories.agents import AgentRepository
 from backend.persistence.repositories.approvals import ApprovalRepository
+from backend.persistence.repositories.audit_events import AuditEventRepository
 from backend.persistence.repositories.messages import MessageRepository
 from backend.persistence.repositories.outbox import OutboxRepository
 from backend.persistence.repositories.peers import PeerRepository
@@ -71,6 +76,7 @@ from backend.requests.states import (
     EXPIRED,
     FAILED,
     PROCESSING,
+    RECOVERABLE,
 )
 
 from .errors import (
@@ -82,14 +88,23 @@ from .errors import (
     RequestExpiredError,
     RequestNotApprovedError,
 )
+from .lease import (
+    CODE_LEASE_EXPIRED,
+    LeaseConfig,
+    can_recover,
+    new_lease,
+)
 from .models import COMPLETED as OUT_COMPLETED
 from .models import FAILED as OUT_FAILED
 from .models import IN_PROGRESS as OUT_IN_PROGRESS
+from .models import RECOVERABLE as OUT_RECOVERABLE
 from .models import ExecutionOutcome
 
 #: Static failure codes sent to the requester (never exception text).
 CODE_EXECUTION_FAILED = "EXECUTION_FAILED"
 CODE_REQUEST_EXPIRED = "REQUEST_EXPIRED"
+
+logger = logging.getLogger("nexus.execution")
 
 #: Minimum remaining response lifetime (seconds) required to record a
 #: successful ``COMPLETED`` result. The response inherits the request's
@@ -143,6 +158,8 @@ class RemoteExecutor:
         local_agent_id: str,
         identities: IdentityProvider,
         runtime: AgentRuntime,
+        *,
+        lease_config: LeaseConfig | None = None,
     ) -> None:
         """Wire one local agent to its signing identity and runtime.
 
@@ -156,6 +173,7 @@ class RemoteExecutor:
         self._local_agent_id = local_agent_id
         self._identities = identities
         self._runtime = runtime
+        self._lease_config = lease_config or LeaseConfig()
 
     @property
     def local_agent_id(self) -> str:
@@ -175,6 +193,7 @@ class RemoteExecutor:
         current = _require_aware(now, "now") if now is not None else _utcnow()
         if not is_valid_request_id(request_id):
             raise RequestValidationError(f"invalid request_id: {request_id!r}")
+        lease_token: str | None = None
         async with session_scope(self._sessions) as session:
             repo = RemoteRequestRepository(session)
             row = await repo.get_for_update(request_id)
@@ -187,6 +206,33 @@ class RemoteExecutor:
             if row.status == FAILED:
                 return self._replay(row, OUT_FAILED, executed=False)
             if row.status == PROCESSING:
+                if can_recover(row, current):
+                    recovered = await repo.update(
+                        request_id,
+                        status=RECOVERABLE,
+                        execution_lease_owner=None,
+                        execution_lease_token=None,
+                        execution_lease_expires_at=None,
+                        execution_heartbeat_at=None,
+                        failure_code=CODE_LEASE_EXPIRED,
+                        failure_message=(
+                            "execution lease expired; operator must retry "
+                            "or resolve"
+                        ),
+                    )
+                    assert recovered is not None
+                    await AuditEventRepository(session).create(
+                        "EXECUTION_LEASE_EXPIRED",
+                        actor_agent_id=self._local_agent_id,
+                        request_id=request_id,
+                        meta={
+                            "attempt": row.execution_attempt,
+                            "lease_owner": row.execution_lease_owner,
+                        },
+                    )
+                    return self._replay(
+                        recovered, OUT_RECOVERABLE, executed=False
+                    )
                 return self._replay(row, OUT_IN_PROGRESS, executed=False)
             if row.status != APPROVED:
                 raise RequestNotApprovedError(
@@ -249,7 +295,29 @@ class RemoteExecutor:
                     raise ExecutionError(
                         f"no signing identity for {self._local_agent_id!r}"
                     ) from exc
-                await repo.update(request_id, status=PROCESSING)
+                lease = new_lease(
+                    self._local_agent_id, current, self._lease_config
+                )
+                attempt = (row.execution_attempt or 0) + 1
+                await repo.update(
+                    request_id,
+                    status=PROCESSING,
+                    execution_lease_owner=lease.owner,
+                    execution_lease_token=lease.token,
+                    execution_lease_expires_at=lease.expires_at,
+                    execution_heartbeat_at=lease.heartbeat_at,
+                    execution_attempt=attempt,
+                )
+                await AuditEventRepository(session).create(
+                    "EXECUTION_STARTED",
+                    actor_agent_id=self._local_agent_id,
+                    request_id=request_id,
+                    meta={
+                        "attempt": attempt,
+                        "lease_owner": lease.owner,
+                    },
+                )
+                lease_token = lease.token
                 expired = False
             query = row.query
             sender_id = row.sender_agent_id
@@ -266,41 +334,98 @@ class RemoteExecutor:
             raise RequestExpiredError(
                 f"request {request_id!r} expired before execution"
             )
-        failure: tuple[str, str] | None = None
-        answer: str | None = None
+        heartbeat_task = self._start_heartbeat(request_id, lease_token)
         try:
-            result: AssistantResponse = await self._runtime.run(
-                query, history=None
-            )
-            answer = result.text
-        except InvalidInputError:
-            failure = (
-                CODE_EXECUTION_FAILED,
-                "request exceeds runtime input limits",
-            )
-        except InvalidModelOutputError:
-            failure = (
-                CODE_EXECUTION_FAILED,
-                "model returned no usable response",
-            )
-        except ModelInvocationError:
-            failure = (
-                CODE_EXECUTION_FAILED,
-                "remote model invocation failed",
-            )
-        except Exception:  # noqa: BLE001 - safe static failure, chained
-            failure = (
-                CODE_EXECUTION_FAILED,
-                "remote execution failed unexpectedly",
-            )
-        try:
-            async with session_scope(self._sessions) as session:
-                return await self._finalize(
-                    session, request_id, sender_id, expires_at,
-                    answer, failure,
+            failure: tuple[str, str] | None = None
+            answer: str | None = None
+            try:
+                result: AssistantResponse = await self._runtime.run(
+                    query, history=None
                 )
-        except ConflictError as exc:
-            return await self._classify_finalize_conflict(request_id)
+                answer = result.text
+            except InvalidInputError:
+                failure = (
+                    CODE_EXECUTION_FAILED,
+                    "request exceeds runtime input limits",
+                )
+            except InvalidModelOutputError:
+                failure = (
+                    CODE_EXECUTION_FAILED,
+                    "model returned no usable response",
+                )
+            except ModelInvocationError:
+                failure = (
+                    CODE_EXECUTION_FAILED,
+                    "remote model invocation failed",
+                )
+            except Exception:  # noqa: BLE001 - safe static failure, chained
+                failure = (
+                    CODE_EXECUTION_FAILED,
+                    "remote execution failed unexpectedly",
+                )
+            try:
+                async with session_scope(self._sessions) as session:
+                    assert lease_token is not None
+                    return await self._finalize(
+                        session, request_id, sender_id, expires_at,
+                        answer, failure, lease_token=lease_token,
+                    )
+            except ConflictError:
+                return await self._classify_finalize_conflict(request_id)
+        finally:
+            await self._stop_heartbeat(heartbeat_task)
+
+    def _start_heartbeat(
+        self, request_id: str, token: str | None
+    ) -> asyncio.Task | None:
+        """Start the best-effort lease heartbeat; None for legacy rows."""
+        if token is None:
+            return None
+        return asyncio.get_running_loop().create_task(
+            self._heartbeat_loop(request_id, token)
+        )
+
+    @staticmethod
+    async def _stop_heartbeat(task: asyncio.Task | None) -> None:
+        """Cancel and collect the heartbeat task without masking errors."""
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    async def _heartbeat_loop(self, request_id: str, token: str) -> None:
+        """Extend the lease while this executor still owns it.
+
+        A failed heartbeat never crashes the execution: the runtime
+        keeps running, but the lease may expire and recovery will make
+        the ambiguity visible. That is safer than aborting a
+        side-effecting tool mid-call.
+        """
+        while True:
+            await asyncio.sleep(self._lease_config.heartbeat_s)
+            now = _utcnow()
+            try:
+                async with session_scope(self._sessions) as session:
+                    owned = await RemoteRequestRepository(session).heartbeat(
+                        request_id,
+                        token,
+                        now=now,
+                        expires_at=now + timedelta(
+                            seconds=self._lease_config.ttl_s
+                        ),
+                    )
+            except Exception:  # noqa: BLE001 - lease is best effort
+                logger.warning(
+                    "lease heartbeat failed for %s", request_id,
+                    exc_info=True,
+                )
+                return
+            if not owned:
+                return
 
     @staticmethod
     def _replay(
@@ -325,12 +450,23 @@ class RemoteExecutor:
         expires_at: datetime,
         answer: str | None,
         failure: tuple[str, str] | None,
+        *,
+        lease_token: str,
     ) -> ExecutionOutcome:
-        """Persist response + outbox + terminal state atomically."""
+        """Persist response + outbox + terminal state atomically.
+
+        The fencing token must still match the durable claim. A worker
+        whose lease expired and was recovered must never overwrite the
+        newer attempt's state, even if its model call eventually returns.
+        """
         current = _utcnow()
         repo = RemoteRequestRepository(session)
         row = await repo.get_for_update(request_id)
-        if row is None or row.status != PROCESSING:
+        if (
+            row is None
+            or row.status != PROCESSING
+            or row.execution_lease_token != lease_token
+        ):
             raise ExecutionConflictError(
                 f"request {request_id!r} left processing during execution; "
                 "no response recorded"
@@ -376,8 +512,22 @@ class RemoteExecutor:
                 completed_at=current,
                 failure_code=CODE_REQUEST_EXPIRED,
                 failure_message="request expired during execution",
+                execution_lease_owner=None,
+                execution_lease_token=None,
+                execution_lease_expires_at=None,
+                execution_heartbeat_at=None,
             )
             assert updated is not None
+            await AuditEventRepository(session).create(
+                "EXECUTION_FAILED",
+                actor_agent_id=self._local_agent_id,
+                request_id=request_id,
+                meta={
+                    "attempt": row.execution_attempt,
+                    "status": FAILED,
+                    "failure_code": CODE_REQUEST_EXPIRED,
+                },
+            )
             return ExecutionOutcome(
                 status=OUT_FAILED,
                 request_id=request_id,
@@ -430,6 +580,10 @@ class RemoteExecutor:
             status=target_status,
             response_message_id=signed.message_id,
             completed_at=current,
+            execution_lease_owner=None,
+            execution_lease_token=None,
+            execution_lease_expires_at=None,
+            execution_heartbeat_at=None,
             **(
                 {"failure_code": failure_code,
                  "failure_message": failure_message}
@@ -438,6 +592,25 @@ class RemoteExecutor:
             ),
         )
         assert updated is not None
+        await AuditEventRepository(session).create(
+            (
+                "EXECUTION_COMPLETED"
+                if target_status == COMPLETED
+                else "EXECUTION_FAILED"
+            ),
+            actor_agent_id=self._local_agent_id,
+            request_id=request_id,
+            message_id=signed.message_id,
+            meta={
+                "attempt": row.execution_attempt,
+                "status": target_status,
+                **(
+                    {"failure_code": failure_code}
+                    if failure_code is not None
+                    else {}
+                ),
+            },
+        )
         return ExecutionOutcome(
             status=(
                 OUT_COMPLETED if target_status == COMPLETED else OUT_FAILED

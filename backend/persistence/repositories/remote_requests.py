@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import RemoteRequest
@@ -20,6 +20,11 @@ _UPDATABLE = {
     "response_message_id",
     "expires_at",
     "conversation_id",
+    "execution_lease_owner",
+    "execution_lease_token",
+    "execution_lease_expires_at",
+    "execution_heartbeat_at",
+    "execution_attempt",
 }
 
 
@@ -112,6 +117,53 @@ class RemoteRequestRepository:
             .offset(offset)
         )
         return list(result.scalars().all())
+
+    async def list_processing_with_expired_lease(
+        self, now: datetime, *, limit: int = 100
+    ) -> list[RemoteRequest]:
+        """PROCESSING rows whose non-null execution lease has expired.
+
+        ``SKIP LOCKED`` lets multiple recovery workers scan the same
+        table without duplicating resolutions. Legacy PROCESSING rows
+        with a NULL lease are deliberately excluded: they predate the
+        lease contract and need an explicit operator migration decision.
+        """
+        result = await self._session.execute(
+            select(RemoteRequest)
+            .where(
+                RemoteRequest.status == "PROCESSING",
+                RemoteRequest.execution_lease_expires_at.is_not(None),
+                RemoteRequest.execution_lease_expires_at <= now,
+            )
+            .order_by(RemoteRequest.execution_lease_expires_at)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        return list(result.scalars().all())
+
+    async def heartbeat(
+        self,
+        request_id: str,
+        token: str,
+        *,
+        now: datetime,
+        expires_at: datetime,
+    ) -> bool:
+        """Extend a lease only while its fencing token still owns it."""
+        result = await self._session.execute(
+            update(RemoteRequest)
+            .where(
+                RemoteRequest.request_id == request_id,
+                RemoteRequest.execution_lease_token == token,
+                RemoteRequest.status == "PROCESSING",
+            )
+            .values(
+                execution_heartbeat_at=now,
+                execution_lease_expires_at=expires_at,
+            )
+        )
+        await _flush(self._session)
+        return result.rowcount == 1
 
     async def update(self, request_id: str, **fields: Any) -> RemoteRequest | None:
         """Update stored columns (transition legality is caller policy)."""

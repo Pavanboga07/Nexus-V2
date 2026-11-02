@@ -1,0 +1,86 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexus-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend / postgres
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: nexus
+          POSTGRES_USER: nexus
+          POSTGRES_PASSWORD: nexus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nexus"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NEXUS_DATABASE_URL: postgresql+asyncpg://nexus:nexus@127.0.0.1:5432/nexus
+      NEXUS_TEST_DATABASE_URL: postgresql+asyncpg://nexus:nexus@127.0.0.1:5432/nexus_test
+      # Gateway-client tests run a real relay server. The relay stays a
+      # separate repository; CI checks out the audited commit rather
+      # than vendoring a copy.
+      PYTHONPATH: ${{ github.workspace }}/gateway-v2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout audited gateway
+        uses: actions/checkout@v4
+        with:
+          repository: Pavanboga07/gateway-v2
+          ref: b1a24d9a06e7bc3408578a3f9e5bb254d560ce53
+          path: gateway-v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+      - name: Compile
+        run: python -m compileall -q backend
+      - name: Migrate
+        run: python -m alembic upgrade head
+      - name: Test
+        run: python -m pytest -q
+
+  frontend:
+    name: frontend / typecheck / unit / build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npm run build
