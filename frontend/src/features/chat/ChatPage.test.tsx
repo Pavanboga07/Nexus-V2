@@ -27,8 +27,15 @@ function renderChat(route: string) {
 
 const AGENTS = [{ agent_id: "local-1", active: true, owned: true, public_key: "k", key_algorithm: "ed25519" }];
 
-function conversation(id: string) {
-  return { id, agent_id: "local-1", title: null, created_at: "2026-10-10T00:00:00Z" };
+function conversation(id: string, title: string | null = null, pinned = false) {
+  return {
+    id,
+    agent_id: "local-1",
+    title,
+    pinned,
+    created_at: "2026-10-10T00:00:00Z",
+    updated_at: "2026-10-10T00:00:00Z",
+  };
 }
 
 describe("ChatPage", () => {
@@ -65,14 +72,13 @@ describe("ChatPage", () => {
       "GET /api/v1/agents": { body: AGENTS },
       "GET /api/v1/conversations": { body: [conversation("conv-1")] },
       "GET /api/v1/conversations/conv-1/messages": { body: [] },
-      "POST /api/v1/conversations/conv-1/turns": {
-        body: {
-          conversation_id: "conv-1",
-          user_message_id: 1,
-          assistant_message_id: 2,
-          answer: "api answer",
-          model: "test",
-        },
+      "POST /api/v1/conversations/conv-1/turns/stream": {
+        sse:
+          'event: user\ndata: {"user_message_id":1}\n\n' +
+          'event: delta\ndata: {"text":"api "}\n\n' +
+          'event: delta\ndata: {"text":"answer"}\n\n' +
+          'event: done\ndata: {"conversation_id":"conv-1","user_message_id":1,' +
+          '"assistant_message_id":2,"answer":"api answer","model":"test"}\n\n',
       },
     });
     const user = userEvent.setup();
@@ -86,6 +92,128 @@ describe("ChatPage", () => {
     });
     const turn = calls.find((call) => call.url.includes("/turns"));
     expect(turn?.body).toEqual({ message: "Ping" });
+    expect(turn?.url).toContain("/turns/stream");
+  });
+
+  it("shows stop while streaming and aborts the turn", async () => {
+    seedAuth();
+    let captured: AbortSignal | null = null;
+    const encoder = new TextEncoder();
+    stubFetch({
+      "GET /api/v1/agents": { body: AGENTS },
+      "GET /api/v1/conversations": { body: [conversation("conv-1", "Slow stream")] },
+      "GET /api/v1/conversations/conv-1/messages": { body: [] },
+      "POST /api/v1/conversations/conv-1/turns/stream": {
+        sse: (signal) => {
+          captured = signal ?? null;
+          return new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode('event: user\ndata: {"user_message_id":1}\n\n'),
+              );
+              controller.enqueue(
+                encoder.encode('event: delta\ndata: {"text":"partial "}\n\n'),
+              );
+              signal?.addEventListener("abort", () => {
+                controller.error(new DOMException("Aborted", "AbortError"));
+              });
+            },
+          });
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderChat("/chats/conv-1");
+    await user.type(await screen.findByLabelText(/message your assistant/i), "Hello");
+    await user.click(screen.getByRole("button", { name: /send message/i }));
+    const stop = await screen.findByRole("button", { name: /stop generating/i });
+    expect(await screen.findByText("partial")).toBeInTheDocument();
+    await user.click(stop);
+    await waitFor(() => expect(captured?.aborted).toBe(true));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /send message/i })).toBeInTheDocument(),
+    );
+    expect(screen.getByText("partial")).toBeInTheDocument();
+  });
+
+  it("renames a conversation inline and persists it", async () => {
+    seedAuth();
+    const { calls } = stubFetch({
+      "GET /api/v1/agents": { body: AGENTS },
+      "GET /api/v1/conversations": { body: [conversation("conv-1", "Old title")] },
+      "PATCH /api/v1/conversations/conv-1": {
+        body: { ...conversation("conv-1", "New title"), updated_at: "2026-10-11T00:00:00Z" },
+      },
+    });
+    const user = userEvent.setup();
+    renderChat("/chats");
+    await user.click(await screen.findByRole("button", { name: /rename old title/i }));
+    const input = screen.getByLabelText("Conversation title");
+    await user.clear(input);
+    await user.type(input, "New title");
+    await user.click(screen.getByRole("button", { name: /save conversation title/i }));
+    await waitFor(() => {
+      const patch = calls.find(
+        (call) => call.method === "PATCH" && call.url.endsWith("/conversations/conv-1"));
+      expect(patch?.body).toEqual({ title: "New title" });
+    });
+    expect(await screen.findByText("New title")).toBeInTheDocument();
+  });
+
+  it("pins a conversation", async () => {
+    seedAuth();
+    const { calls } = stubFetch({
+      "GET /api/v1/agents": { body: AGENTS },
+      "GET /api/v1/conversations": { body: [conversation("conv-1", "Alpha")] },
+      "PATCH /api/v1/conversations/conv-1": {
+        body: { ...conversation("conv-1", "Alpha", true), updated_at: "2026-10-11T00:00:00Z" },
+      },
+    });
+    const user = userEvent.setup();
+    renderChat("/chats");
+    await user.click(await screen.findByRole("button", { name: /pin alpha/i }));
+    await waitFor(() => {
+      const patch = calls.find(
+        (call) => call.method === "PATCH" && call.url.endsWith("/conversations/conv-1"));
+      expect(patch?.body).toEqual({ pinned: true });
+    });
+    expect(await screen.findByRole("button", { name: /unpin alpha/i })).toBeInTheDocument();
+  });
+
+  it("deletes a conversation after confirmation", async () => {
+    seedAuth();
+    const { calls } = stubFetch({
+      "GET /api/v1/agents": { body: AGENTS },
+      "GET /api/v1/conversations": { body: [conversation("conv-1", "Disposable")] },
+      "DELETE /api/v1/conversations/conv-1": { body: { deleted: true } },
+    });
+    const user = userEvent.setup();
+    renderChat("/chats");
+    await user.click(await screen.findByRole("button", { name: /delete disposable/i }));
+    await user.click(await screen.findByRole("button", { name: /^delete conversation$/i }));
+    await waitFor(() => {
+      expect(calls.some(
+        (call) => call.method === "DELETE" && call.url.endsWith("/conversations/conv-1"),
+      )).toBe(true);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Disposable")).not.toBeInTheDocument();
+    });
+  });
+
+  it("searches conversations on the server", async () => {
+    seedAuth();
+    const { calls } = stubFetch({
+      "GET /api/v1/agents": { body: AGENTS },
+      "GET /api/v1/conversations": { body: [conversation("conv-1", "Pineapple notes")] },
+    });
+    const user = userEvent.setup();
+    renderChat("/chats");
+    const search = await screen.findByLabelText(/search conversations/i);
+    await user.type(search, "pine");
+    await waitFor(() => {
+      expect(calls.some((call) => call.url.includes("q=pine"))).toBe(true);
+    });
   });
 
   it("shows the empty state when no conversations exist", async () => {

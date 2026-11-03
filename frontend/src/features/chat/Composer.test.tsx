@@ -19,7 +19,7 @@ describe("Composer", () => {
     seedAuth();
     stubNetwork();
     renderApp(
-      <Composer sending={false} sendError={null} onSend={() => {}} connectedAgentCount={1} />,
+      <Composer sending={false} sendError={null} onSend={() => {}} onStop={() => {}} connectedAgentCount={1} />,
     );
     expect(screen.getByRole("button", { name: /ask a connected agent/i })).toHaveAttribute(
       "aria-expanded",
@@ -34,7 +34,7 @@ describe("Composer", () => {
     const { calls } = stubNetwork();
     const user = userEvent.setup();
     renderApp(
-      <Composer sending={false} sendError={null} onSend={() => {}} connectedAgentCount={1} />,
+      <Composer sending={false} sendError={null} onSend={() => {}} onStop={() => {}} connectedAgentCount={1} />,
     );
     await user.click(screen.getByRole("button", { name: /ask a connected agent/i }));
     expect(await screen.findByLabelText("Connected agent")).toBeInTheDocument();
@@ -55,7 +55,7 @@ describe("Composer", () => {
     stubNetwork();
     const user = userEvent.setup();
     renderApp(
-      <Composer sending={false} sendError={null} onSend={() => {}} connectedAgentCount={1} />,
+      <Composer sending={false} sendError={null} onSend={() => {}} onStop={() => {}} connectedAgentCount={1} />,
     );
     await user.click(screen.getByRole("button", { name: /ask a connected agent/i }));
     const task = await screen.findByPlaceholderText(/describe the task/i);
@@ -74,7 +74,7 @@ describe("Composer", () => {
     const onSend = vi.fn();
     const user = userEvent.setup();
     renderApp(
-      <Composer sending={false} sendError={null} onSend={onSend} connectedAgentCount={1} />,
+      <Composer sending={false} sendError={null} onSend={onSend} onStop={() => {}} connectedAgentCount={1} />,
     );
     const box = screen.getByLabelText(/message your assistant/i);
     await user.type(box, "Hello Nexus{enter}");
@@ -88,13 +88,13 @@ describe("Composer", () => {
     expect(box).toHaveValue("");
   });
 
-  it("disables submit while a turn is pending", () => {
+  it("offers stop while a turn is pending", () => {
     seedAuth();
     stubNetwork();
     renderApp(
-      <Composer sending sendError={null} onSend={() => {}} connectedAgentCount={1} />,
+      <Composer sending sendError={null} onSend={() => {}} onStop={() => {}} connectedAgentCount={1} />,
     );
-    expect(screen.getByRole("button", { name: /send message/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /stop generating/i })).toBeEnabled();
   });
 
   it("keeps the bearer token out of every request URL", async () => {
@@ -102,7 +102,7 @@ describe("Composer", () => {
     const { calls } = stubNetwork();
     const user = userEvent.setup();
     renderApp(
-      <Composer sending={false} sendError={null} onSend={() => {}} connectedAgentCount={1} />,
+      <Composer sending={false} sendError={null} onSend={() => {}} onStop={() => {}} connectedAgentCount={1} />,
     );
     await user.click(screen.getByRole("button", { name: /ask a connected agent/i }));
     await screen.findByLabelText("Connected agent");

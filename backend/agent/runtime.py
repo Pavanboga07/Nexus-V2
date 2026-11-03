@@ -12,10 +12,15 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, AsyncIterator, Sequence
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
 
 from .config import AgentRuntimeConfig
 from .errors import (
@@ -23,7 +28,7 @@ from .errors import (
     InvalidModelOutputError,
     ModelInvocationError,
 )
-from .graph import build_graph
+from .graph import build_graph, extract_text, tool_calls_of
 from .model_factory import build_chat_model
 
 
@@ -136,3 +141,66 @@ class AgentRuntime:
                 "model returned no usable text content"
             )
         return AssistantResponse(text=text, model_name=self.model_name)
+
+    async def stream(
+        self,
+        user_input: str,
+        history: Sequence[BaseMessage] | None = None,
+        *,
+        system_instruction: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Yield one assistant reply as text deltas.
+
+        The graph path (tools bound) cannot stream intermediate model
+        turns safely, so it falls back to one complete chunk. The
+        tool-free path streams the provider's chunks directly, with the
+        same input validation and timeout as :meth:`run`.
+        """
+        if not isinstance(user_input, str) or not user_input.strip():
+            raise InvalidInputError("user_input must be a non-empty string")
+        if len(user_input) > self._config.max_input_chars:
+            raise InvalidInputError(
+                f"user_input exceeds {self._config.max_input_chars} characters"
+            )
+        system = system_instruction or self._config.system_instruction
+        if not isinstance(system, str) or not system.strip():
+            raise InvalidInputError("system_instruction must be non-empty")
+        if self._tools:
+            response = await self.run(
+                user_input, history, system_instruction=system
+            )
+            yield response.text
+            return
+
+        prompt = [
+            SystemMessage(content=system),
+            *self._bounded_history(history),
+            HumanMessage(content=user_input),
+        ]
+        collected: list[str] = []
+        try:
+            async with asyncio.timeout(self._config.request_timeout_s):
+                async for chunk in self._model.astream(prompt):
+                    if tool_calls_of(chunk):
+                        raise InvalidModelOutputError(
+                            "model returned tool calls, but this runtime "
+                            "has no tools"
+                        )
+                    piece = extract_text(getattr(chunk, "content", ""))
+                    if piece:
+                        collected.append(piece)
+                        yield piece
+        except InvalidModelOutputError:
+            raise
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            raise ModelInvocationError(
+                "model invocation timed out"
+            ) from exc
+        except Exception as exc:
+            raise ModelInvocationError(
+                "model invocation failed"
+            ) from exc
+        if not "".join(collected).strip():
+            raise InvalidModelOutputError(
+                "model returned no usable text content"
+            )

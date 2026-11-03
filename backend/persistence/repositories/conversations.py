@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Conversation, ConversationMessage
@@ -12,7 +12,7 @@ from . import _flush
 
 
 class ConversationRepository:
-    """Create, load, and retitle conversation threads."""
+    """Create, load, organize, and delete conversation threads."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -30,23 +30,93 @@ class ConversationRepository:
         """Load one thread by id, or None."""
         return await self._session.get(Conversation, conversation_id)
 
-    async def update(self, conversation_id: Any, title: str | None) -> Conversation | None:
+    async def rename(
+        self, conversation_id: Any, title: str | None
+    ) -> Conversation | None:
         """Retitle one thread (may clear the title with None)."""
         conversation = await self.get(conversation_id)
         if conversation is None:
             return None
         conversation.title = title
         await _flush(self._session)
+        await self._session.refresh(conversation)
         return conversation
 
+    async def update(
+        self, conversation_id: Any, title: str | None
+    ) -> Conversation | None:
+        """Backward-compatible alias for :meth:`rename`."""
+        return await self.rename(conversation_id, title)
+
+    async def set_pinned(
+        self, conversation_id: Any, pinned: bool
+    ) -> Conversation | None:
+        """Pin or unpin one thread."""
+        conversation = await self.get(conversation_id)
+        if conversation is None:
+            return None
+        conversation.pinned = pinned
+        await _flush(self._session)
+        await self._session.refresh(conversation)
+        return conversation
+
+    async def touch(self, conversation_id: Any) -> None:
+        """Mark a thread active so recency ordering reflects new turns."""
+        await self._session.execute(
+            update(Conversation)
+            .where(Conversation.id == conversation_id)
+            .values(updated_at=func.now())
+        )
+
+    async def delete(self, conversation_id: Any) -> bool:
+        """Delete a thread and its messages (no orphaned history)."""
+        conversation = await self.get(conversation_id)
+        if conversation is None:
+            return False
+        await self._session.execute(
+            delete(ConversationMessage).where(
+                ConversationMessage.conversation_id == conversation_id
+            )
+        )
+        await self._session.delete(conversation)
+        await _flush(self._session)
+        return True
+
     async def list_by_agent(
-        self, agent_id: str, *, limit: int = 100, offset: int = 0
+        self,
+        agent_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        query: str | None = None,
     ) -> list[Conversation]:
-        """Threads of one agent, oldest first."""
+        """Threads of one agent: pinned first, then most recently active.
+
+        ``query`` matches the title or any stored message, so a user can
+        find a thread by what was said rather than only by its title.
+        """
+        clauses = [Conversation.agent_id == agent_id]
+        needle = (query or "").strip()
+        if needle:
+            clauses.append(
+                or_(
+                    Conversation.title.icontains(needle, autoescape=True),
+                    exists().where(
+                        ConversationMessage.conversation_id == Conversation.id,
+                        ConversationMessage.content.icontains(
+                            needle, autoescape=True
+                        ),
+                    ),
+                )
+            )
         result = await self._session.execute(
             select(Conversation)
-            .where(Conversation.agent_id == agent_id)
-            .order_by(Conversation.created_at)
+            .where(*clauses)
+            .order_by(
+                Conversation.pinned.desc(),
+                Conversation.updated_at.desc(),
+                Conversation.id.desc(),
+            )
             .limit(limit)
             .offset(offset)
         )
@@ -77,6 +147,7 @@ class ConversationMessageRepository:
         )
         self._session.add(message)
         await _flush(self._session)
+        await ConversationRepository(self._session).touch(conversation_id)
         return message
 
     async def list_by_conversation(

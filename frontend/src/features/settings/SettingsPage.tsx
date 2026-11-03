@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
 import { useAuth } from "../../lib/auth/AuthProvider";
 import { useEventBus } from "../../app/EventBus";
 import { checkLive, checkReady } from "../../lib/api/endpoints";
@@ -118,6 +119,27 @@ export function SettingsPage() {
       </section>
 
       <AiProviderSection />
+
+      <section aria-labelledby="activity-heading" className="mt-4 rounded-card border border-graphite-700 bg-graphite-900 p-5">
+        <h2 id="activity-heading" className="text-base font-semibold text-ink-50">Network activity</h2>
+        <p className="mt-1 text-sm text-ink-500">
+          Remote requests and approvals are secondary to the chat. Open them here when you need the audit trail.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Link
+            to="/requests"
+            className="inline-flex min-h-[44px] items-center rounded-control border border-graphite-700 bg-graphite-800 px-3 text-sm text-ink-100 hover:border-ink-600"
+          >
+            Request history
+          </Link>
+          <Link
+            to="/approvals"
+            className="inline-flex min-h-[44px] items-center rounded-control border border-graphite-700 bg-graphite-800 px-3 text-sm text-ink-100 hover:border-ink-600"
+          >
+            Approvals
+          </Link>
+        </div>
+      </section>
 
       <section aria-labelledby="events-heading" className="mt-4 rounded-card border border-graphite-700 bg-graphite-900 p-5">
         <h2 id="events-heading" className="text-base font-semibold text-ink-50">Live events</h2>

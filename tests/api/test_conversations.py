@@ -56,6 +56,143 @@ async def test_conversation_lifecycle(db):
 
 
 @pytest.mark.asyncio
+async def test_conversation_rename_pin_delete_and_search(db):
+    keys = Keys()
+    app, _ = _app(db, settings := make_settings(), keys)
+    agent = await seed_owned_agent(db, keys)
+    async with make_client(app) as client:
+        headers = auth_headers()
+        first = (await client.post(
+            "/api/v1/conversations", headers=headers,
+            json={"agent_id": agent.agent_id, "title": "Alpha"})).json()
+        second = (await client.post(
+            "/api/v1/conversations", headers=headers,
+            json={"agent_id": agent.agent_id, "title": "Beta"})).json()
+
+        renamed = await client.patch(
+            f"/api/v1/conversations/{first['id']}",
+            headers=headers, json={"title": "Renamed thread"})
+        assert renamed.status_code == 200, renamed.text
+        assert renamed.json()["title"] == "Renamed thread"
+
+        pinned = await client.patch(
+            f"/api/v1/conversations/{first['id']}",
+            headers=headers, json={"pinned": True})
+        assert pinned.status_code == 200, pinned.text
+        assert pinned.json()["pinned"] is True
+
+        listed = (await client.get(
+            "/api/v1/conversations",
+            params={"agent_id": agent.agent_id}, headers=headers)).json()
+        assert [row["id"] for row in listed][0] == first["id"]
+
+        sent = await client.post(
+            f"/api/v1/conversations/{second['id']}/turns",
+            headers=headers, json={"message": "Talk about pineapples"})
+        assert sent.status_code == 200, sent.text
+        by_message = (await client.get(
+            "/api/v1/conversations",
+            params={"agent_id": agent.agent_id, "q": "pineapple"},
+            headers=headers)).json()
+        assert [row["id"] for row in by_message] == [second["id"]]
+        by_title = (await client.get(
+            "/api/v1/conversations",
+            params={"agent_id": agent.agent_id, "q": "Renamed"},
+            headers=headers)).json()
+        assert [row["id"] for row in by_title] == [first["id"]]
+
+        assert (await client.patch(
+            f"/api/v1/conversations/{first['id']}",
+            headers=headers, json={})).status_code == 422
+
+        deleted = await client.delete(
+            f"/api/v1/conversations/{first['id']}", headers=headers)
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json() == {"deleted": True}
+        remaining = (await client.get(
+            "/api/v1/conversations",
+            params={"agent_id": agent.agent_id}, headers=headers)).json()
+        assert first["id"] not in {row["id"] for row in remaining}
+        gone = await client.get(
+            f"/api/v1/conversations/{first['id']}/messages",
+            headers=headers)
+        assert gone.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_stream_turn_sends_deltas_and_persists_once(db):
+    keys = Keys()
+    app, _ = _app(db, settings := make_settings(), keys)
+    agent = await seed_owned_agent(db, keys)
+    async with make_client(app) as client:
+        headers = auth_headers()
+        created = (await client.post(
+            "/api/v1/conversations", headers=headers,
+            json={"agent_id": agent.agent_id})).json()
+
+        events: list[tuple[str, dict]] = []
+        async with client.stream(
+            "POST",
+            f"/api/v1/conversations/{created['id']}/turns/stream",
+            headers=headers, json={"message": "Stream this answer"},
+        ) as response:
+            assert response.status_code == 200, await response.aread()
+            assert response.headers["content-type"].startswith(
+                "text/event-stream"
+            )
+            name = ""
+            async for line in response.aiter_lines():
+                if line.startswith("event: "):
+                    name = line[len("event: "):]
+                elif line.startswith("data: "):
+                    import json as json_mod
+
+                    events.append((name, json_mod.loads(line[len("data: "):])))
+
+        kinds = [kind for kind, _ in events]
+        assert kinds[0] == "user"
+        assert kinds[-1] == "done"
+        assert "delta" in kinds
+        deltas = "".join(
+            payload["text"] for kind, payload in events if kind == "delta"
+        )
+        done = events[-1][1]
+        assert deltas.strip()
+        assert done["assistant_message_id"]
+
+        messages = (await client.get(
+            f"/api/v1/conversations/{created['id']}/messages",
+            headers=headers)).json()
+        assert [row["role"] for row in messages] == ["user", "agent"]
+        assert messages[1]["content"] == deltas
+        listed = (await client.get(
+            "/api/v1/conversations",
+            params={"agent_id": agent.agent_id}, headers=headers)).json()
+        assert listed[0]["title"] == "Stream this answer"
+
+
+@pytest.mark.asyncio
+async def test_untitled_conversation_takes_the_first_turn_as_title(db):
+    keys = Keys()
+    app, _ = _app(db, settings := make_settings(), keys)
+    agent = await seed_owned_agent(db, keys)
+    async with make_client(app) as client:
+        headers = auth_headers()
+        created = (await client.post(
+            "/api/v1/conversations", headers=headers,
+            json={"agent_id": agent.agent_id})).json()
+        assert created["title"] is None
+        sent = await client.post(
+            f"/api/v1/conversations/{created['id']}/turns",
+            headers=headers, json={"message": "Plan my week"})
+        assert sent.status_code == 200, sent.text
+        listed = (await client.get(
+            "/api/v1/conversations",
+            params={"agent_id": agent.agent_id}, headers=headers)).json()
+        assert listed[0]["title"] == "Plan my week"
+
+
+@pytest.mark.asyncio
 async def test_conversation_other_owner_is_404(db):
     import uuid as uuid_mod
 
@@ -83,6 +220,12 @@ async def test_conversation_other_owner_is_404(db):
             f"/api/v1/conversations/{foreign_id}/turns",
             headers=headers, json={"message": "hi"})
         assert turn.status_code == 404
+        assert (await client.patch(
+            f"/api/v1/conversations/{foreign_id}",
+            headers=headers, json={"title": "mine now"})).status_code == 404
+        assert (await client.delete(
+            f"/api/v1/conversations/{foreign_id}",
+            headers=headers)).status_code == 404
         listed = await client.get(
             "/api/v1/conversations",
             params={"agent_id": stranger.agent_id}, headers=headers)

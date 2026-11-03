@@ -67,10 +67,13 @@ Interactive schema: `GET /api/docs` (Swagger UI), raw OpenAPI:
 | `GET /health/ready` | Database reachability (`200 ready` / `503 not-ready`, no detail) |
 | `GET /agents` | Caller's local agents (id, active, public identity) |
 | `GET /agents/{id}/peers` | Peerings of one owned agent |
-| `GET /conversations?agent_id=` | Threads of one owned agent (bounded `limit`/`offset`) |
+| `GET /conversations?agent_id=` | Threads of one owned agent; pinned first, then recent; optional `q` searches title and message text; bounded `limit`/`offset` |
 | `POST /conversations` | Open a thread (`agent_id`, optional `title`) → 201 |
+| `PATCH /conversations/{id}` | Rename (`title`) and/or pin (`pinned`); omitted fields are kept |
+| `DELETE /conversations/{id}` | Delete the thread and its messages |
 | `GET /conversations/{id}/messages` | Stored turns (`user`/`agent` roles) |
-| `POST /conversations/{id}/turns` | One model turn, persisted atomically |
+| `POST /conversations/{id}/turns` | One model turn, persisted atomically; an untitled thread takes its first user message as the title |
+| `POST /conversations/{id}/turns/stream` | Same turn as Server-Sent Events (`user`, `delta`, `done`; `error` after start); a client abort stops generation and stores the partial answer |
 | `POST /requests` | Create + queue a remote request → 201 (`request_id` accepted verbatim; reuse conflicts with 409 — not an idempotency key) |
 | `GET /requests?role=inbound\|outbound` | Bounded list, optional `status`, `limit`/`offset` |
 | `GET /requests/{id}` | Status, parties, and the stored answer once terminal |

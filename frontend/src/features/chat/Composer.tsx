@@ -1,7 +1,6 @@
 import { useState, type FormEvent, type KeyboardEvent } from "react";
-import { ChevronDown, Send } from "lucide-react";
+import { ChevronDown, Send, Square } from "lucide-react";
 import { Button } from "../../components/ui/Button";
-import { Spinner } from "../../components/ui/Feedback";
 import { RemoteRequestPanel } from "./RemoteRequestPanel";
 
 export interface ComposerProps {
@@ -9,6 +8,7 @@ export interface ComposerProps {
   sending: boolean;
   sendError: string | null;
   onSend: (message: string) => void;
+  onStop: () => void;
   connectedAgentCount: number;
 }
 
@@ -19,6 +19,7 @@ export function Composer({
   sending,
   sendError,
   onSend,
+  onStop,
   connectedAgentCount,
 }: ComposerProps) {
   const [draft, setDraft] = useState("");
@@ -59,14 +60,15 @@ export function Composer({
             className="max-h-40 min-h-[44px] flex-1 resize-none bg-transparent px-2 py-2 text-[15px] leading-relaxed text-ink-50 placeholder:text-ink-600 focus:outline-none disabled:opacity-60"
           />
           <Button
-            variant="primary"
+            variant={sending ? "secondary" : "primary"}
             size="icon"
-            type="submit"
-            disabled={!canSend}
-            aria-label="Send message"
+            type={sending ? "button" : "submit"}
+            onClick={sending ? onStop : undefined}
+            disabled={!sending && !canSend}
+            aria-label={sending ? "Stop generating" : "Send message"}
           >
             {sending ? (
-              <Spinner label="Sending" />
+              <Square className="h-4 w-4" aria-hidden="true" />
             ) : (
               <Send className="h-4 w-4" aria-hidden="true" />
             )}

@@ -155,7 +155,16 @@ class ConversationBody(StrictModel):
     id: str
     agent_id: str
     title: str | None
+    pinned: bool
     created_at: datetime
+    updated_at: datetime
+
+
+class ConversationUpdate(StrictModel):
+    """Partial update: rename, pin, or both. Omitted fields are kept."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=256)
+    pinned: bool | None = None
 
 
 class ConversationMessageBody(StrictModel):
@@ -259,7 +268,9 @@ def conversation_body(row: Any) -> ConversationBody:
         id=str(row.id),
         agent_id=row.agent_id,
         title=row.title,
+        pinned=bool(row.pinned),
         created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 

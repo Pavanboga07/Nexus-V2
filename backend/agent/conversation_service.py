@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, AsyncIterator
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -36,6 +36,7 @@ from .errors import (
     ConversationMismatchError,
     ConversationNotFoundError,
     InvalidInputError,
+    InvalidModelOutputError,
 )
 from .runtime import AgentRuntime, AssistantResponse
 
@@ -103,14 +104,57 @@ class ConversationService:
             )
 
     async def list_conversations(
-        self, agent_id: str, *, limit: int = 100, offset: int = 0
+        self,
+        agent_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        query: str | None = None,
     ) -> list[Conversation]:
-        """Threads of one locally owned agent, oldest first."""
+        """Threads of one locally owned agent: pinned, then recent."""
         async with self._sessions() as session:
             await self._require_local_agent(session, agent_id)
             return await ConversationRepository(session).list_by_agent(
-                agent_id, limit=limit, offset=offset
+                agent_id, limit=limit, offset=offset, query=query
             )
+
+    async def rename_conversation(
+        self, agent_id: str, conversation_id: Any, title: str
+    ) -> Conversation:
+        """Retitle one owned thread."""
+        async with session_scope(self._sessions) as session:
+            await self._load_owned_conversation(
+                session, agent_id, conversation_id
+            )
+            renamed = await ConversationRepository(session).rename(
+                conversation_id, title
+            )
+            assert renamed is not None
+            return renamed
+
+    async def set_conversation_pinned(
+        self, agent_id: str, conversation_id: Any, pinned: bool
+    ) -> Conversation:
+        """Pin or unpin one owned thread."""
+        async with session_scope(self._sessions) as session:
+            await self._load_owned_conversation(
+                session, agent_id, conversation_id
+            )
+            updated = await ConversationRepository(session).set_pinned(
+                conversation_id, pinned
+            )
+            assert updated is not None
+            return updated
+
+    async def delete_conversation(
+        self, agent_id: str, conversation_id: Any
+    ) -> None:
+        """Delete one owned thread and its messages."""
+        async with session_scope(self._sessions) as session:
+            await self._load_owned_conversation(
+                session, agent_id, conversation_id
+            )
+            await ConversationRepository(session).delete(conversation_id)
 
     async def submit_turn(
         self,
@@ -149,6 +193,14 @@ class ConversationService:
             response = await active.run(user_text, history)
             async with session_scope(self._sessions) as session:
                 messages = ConversationMessageRepository(session)
+                conversation = await ConversationRepository(session).get(
+                    conversation_id
+                )
+                if conversation is not None and not conversation.title:
+                    # Name the thread from its first user turn. Done in the
+                    # same transaction as the messages, so a failed model
+                    # call leaves no title and no half-turn behind.
+                    conversation.title = user_text.strip()[:60]
                 user_row = await messages.create(
                     conversation_id, "user", user_text
                 )
@@ -162,6 +214,80 @@ class ConversationService:
                 response=response,
                 created_at=assistant_row.created_at,
             )
+
+    async def stream_turn(
+        self,
+        agent_id: str,
+        conversation_id: Any,
+        user_text: str,
+        runtime: Any = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Stream one user→assistant turn as typed events.
+
+        The user row is stored before generation so a stopped request
+        still leaves an honest transcript. Assistant text is stored when
+        the stream ends, including a partial answer after a client stop.
+        Events: ``user``, ``delta``, then ``done``.
+        """
+        if not isinstance(user_text, str) or not user_text.strip():
+            raise InvalidInputError("user_text must be a non-empty string")
+        active = runtime if runtime is not None else self._runtime
+        limit = active.config.max_input_chars
+        if len(user_text) > limit:
+            raise InvalidInputError(
+                f"user_text exceeds {limit} characters"
+            )
+        async with self._lock_for(conversation_id):
+            async with self._sessions() as session:
+                await self._require_local_agent(session, agent_id)
+                await self._load_owned_conversation(
+                    session, agent_id, conversation_id
+                )
+                stored = await ConversationMessageRepository(
+                    session
+                ).list_recent(
+                    conversation_id,
+                    active.config.max_history_messages,
+                )
+            history = [self._to_message(row) for row in stored]
+
+            async with session_scope(self._sessions) as session:
+                conversation = await ConversationRepository(session).get(
+                    conversation_id
+                )
+                if conversation is not None and not conversation.title:
+                    conversation.title = user_text.strip()[:60]
+                user_row = await ConversationMessageRepository(
+                    session
+                ).create(conversation_id, "user", user_text)
+
+            yield {"type": "user", "user_message_id": user_row.id}
+
+            pieces: list[str] = []
+            assistant_id: int | None = None
+            try:
+                async for piece in active.stream(user_text, history):
+                    pieces.append(piece)
+                    yield {"type": "delta", "text": piece}
+            finally:
+                text = "".join(pieces)
+                if text.strip():
+                    async with session_scope(self._sessions) as session:
+                        assistant_row = await ConversationMessageRepository(
+                            session
+                        ).create(conversation_id, "agent", text)
+                        assistant_id = assistant_row.id
+            if assistant_id is None:
+                raise InvalidModelOutputError(
+                    "model returned no usable text content"
+                )
+            yield {
+                "type": "done",
+                "conversation_id": str(conversation_id),
+                "user_message_id": user_row.id,
+                "assistant_message_id": assistant_id,
+                "model": active.model_name,
+            }
 
     async def _require_local_agent(
         self, session: AsyncSession, agent_id: str

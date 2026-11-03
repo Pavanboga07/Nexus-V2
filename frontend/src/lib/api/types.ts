@@ -18,7 +18,9 @@ export interface Conversation {
   id: string;
   agent_id: string;
   title: string | null;
+  pinned: boolean;
   created_at: string;
+  updated_at: string;
 }
 
 export interface ConversationMessage {

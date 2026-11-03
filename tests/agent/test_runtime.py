@@ -53,7 +53,23 @@ async def test_injected_model_needs_no_credentials():  # 5 (runtime side)
 
 
 @pytest.mark.asyncio
-async def test_unicode_and_emoji_survive():  # 31
+async def test_stream_yields_provider_chunks():
+    runtime = _runtime()
+    pieces = [piece async for piece in runtime.stream("hello")]
+    assert pieces
+    assert "".join(pieces) == "test reply"
+
+
+@pytest.mark.asyncio
+async def test_stream_empty_output_is_invalid():
+    runtime = AgentRuntime(
+        AgentRuntimeConfig(), model=DeterministicChatModel(canned=""))
+    with pytest.raises(InvalidModelOutputError):
+        [piece async for piece in runtime.stream("hello")]
+
+
+@pytest.mark.asyncio
+async def test_stream_unicode_and_emoji_survive():  # 31
     runtime = _runtime()
     text = "caf\u00e9 \U0001f600 \u4e2d\u6587"
     response = await runtime.run(text)

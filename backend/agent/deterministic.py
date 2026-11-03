@@ -17,9 +17,13 @@ instead of silently falling back to this model.
 
 from __future__ import annotations
 
+import asyncio
+import re
+from typing import Any, AsyncIterator
+
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 
 class DeterministicModel(BaseChatModel):
@@ -45,3 +49,26 @@ class DeterministicModel(BaseChatModel):
         return ChatResult(
             generations=[ChatGeneration(message=AIMessage(content=text))]
         )
+
+    async def _astream(
+        self,
+        messages,
+        stop=None,
+        run_manager=None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        """Word-by-word stream for the development model.
+
+        Real providers stream their own chunks; this keeps the local
+        demo honest about the transport without pretending to be one.
+        """
+        result = self._generate(messages, stop=stop, run_manager=run_manager)
+        text = result.generations[0].message.content
+        for part in re.findall(r"\S+\s*", str(text)):
+            chunk = ChatGenerationChunk(
+                message=AIMessageChunk(content=part)
+            )
+            if run_manager is not None:
+                await run_manager.on_llm_new_token(part, chunk=chunk)
+            yield chunk
+            await asyncio.sleep(0.015)

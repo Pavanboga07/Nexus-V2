@@ -1,4 +1,4 @@
-import { publicGet, request } from "./client";
+import { ApiError, publicGet, request } from "./client";
 import type {
   Agent,
   Conversation,
@@ -39,6 +39,7 @@ export interface ListConversationsParams {
   agentId: string;
   limit?: number;
   offset?: number;
+  query?: string;
 }
 
 export function listConversations(
@@ -49,10 +50,40 @@ export function listConversations(
   const search = new URLSearchParams({ agent_id: params.agentId });
   if (params.limit !== undefined) search.set("limit", String(params.limit));
   if (params.offset !== undefined) search.set("offset", String(params.offset));
+  if (params.query && params.query.trim().length > 0) {
+    search.set("q", params.query.trim());
+  }
   return request<Conversation[]>(
     baseUrl,
     token,
     `/conversations?${search.toString()}`,
+  );
+}
+
+export function updateConversation(
+  baseUrl: string,
+  token: string,
+  conversationId: string,
+  patch: { title?: string; pinned?: boolean },
+): Promise<Conversation> {
+  return request<Conversation>(
+    baseUrl,
+    token,
+    `/conversations/${encodeURIComponent(conversationId)}`,
+    { method: "PATCH", body: JSON.stringify(patch) },
+  );
+}
+
+export function deleteConversation(
+  baseUrl: string,
+  token: string,
+  conversationId: string,
+): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(
+    baseUrl,
+    token,
+    `/conversations/${encodeURIComponent(conversationId)}`,
+    { method: "DELETE" },
   );
 }
 
@@ -94,6 +125,109 @@ export function sendTurn(
     `/conversations/${encodeURIComponent(conversationId)}/turns`,
     { method: "POST", body: JSON.stringify({ message }), signal },
   );
+}
+
+export interface TurnStreamHandlers {
+  onUser?: (userMessageId: number) => void;
+  onDelta: (text: string) => void;
+}
+
+/** Stream one turn over Server-Sent Events; resolves with the final turn. */
+export async function sendTurnStream(
+  baseUrl: string,
+  token: string,
+  conversationId: string,
+  message: string,
+  handlers: TurnStreamHandlers,
+  signal?: AbortSignal,
+): Promise<Turn> {
+  const response = await fetch(
+    `${baseUrl}/api/v1/conversations/${encodeURIComponent(conversationId)}/turns/stream`,
+    {
+      method: "POST",
+      signal,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ message }),
+    },
+  );
+  if (!response.ok) {
+    let body: unknown = null;
+    try {
+      body = await response.json();
+    } catch {
+      body = null;
+    }
+    const record =
+      body !== null && typeof body === "object"
+        ? (body as Record<string, unknown>)
+        : null;
+    throw new ApiError(
+      response.status,
+      typeof record?.code === "string" ? record.code : "HTTP_ERROR",
+      typeof record?.message === "string"
+        ? record.message
+        : "The request failed.",
+    );
+  }
+  if (!response.body) {
+    throw new ApiError(0, "NETWORK_ERROR", "The response could not be read.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let done: Turn | null = null;
+
+  const handle = (raw: string) => {
+    let event = "message";
+    const data: string[] = [];
+    for (const line of raw.split("\n")) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+    }
+    if (data.length === 0) return;
+    const payload = JSON.parse(data.join("\n")) as Record<string, unknown>;
+    if (event === "user" && typeof payload.user_message_id === "number") {
+      handlers.onUser?.(payload.user_message_id);
+    } else if (event === "delta" && typeof payload.text === "string") {
+      handlers.onDelta(payload.text);
+    } else if (event === "done") {
+      done = payload as unknown as Turn;
+    } else if (event === "error") {
+      throw new ApiError(
+        500,
+        typeof payload.code === "string" ? payload.code : "INTERNAL_ERROR",
+        typeof payload.message === "string"
+          ? payload.message
+          : "The answer could not be completed.",
+      );
+    }
+  };
+
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        handle(buffer.slice(0, boundary));
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+    if (buffer.trim().length > 0) handle(buffer);
+  } finally {
+    reader.releaseLock();
+  }
+  if (done === null) {
+    throw new ApiError(0, "STREAM_INCOMPLETE", "The answer ended unexpectedly.");
+  }
+  return done;
 }
 
 export interface CreateRequestBody {

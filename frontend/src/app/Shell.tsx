@@ -2,8 +2,6 @@ import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   Bot,
-  CheckSquare,
-  Inbox,
   LogOut,
   Menu,
   MessagesSquare,
@@ -16,9 +14,7 @@ import { cn } from "../components/ui/cn";
 
 const links = [
   { to: "/chats", label: "Chats", icon: MessagesSquare },
-  { to: "/agents", label: "Agents", icon: Bot },
-  { to: "/requests", label: "Requests", icon: Inbox },
-  { to: "/approvals", label: "Approvals", icon: CheckSquare },
+  { to: "/agents", label: "Connections", icon: Bot },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
@@ -58,7 +54,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         </span>
         <div>
           <p className="text-[15px] font-semibold leading-tight text-ink-50">Nexus</p>
-          <p className="text-xs text-ink-500">Agent workspace</p>
+          <p className="text-xs text-ink-500">Your AI workspace</p>
         </div>
       </div>
       <nav aria-label="Primary" className="flex flex-col gap-1 px-3 py-3">

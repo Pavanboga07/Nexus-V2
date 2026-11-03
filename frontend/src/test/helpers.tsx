@@ -42,9 +42,13 @@ export interface RecordedCall {
   auth: string | null;
 }
 
+export type SseStub =
+  | string
+  | ((signal?: AbortSignal | null) => ReadableStream<Uint8Array>);
+
 /** Fetch stub keyed by "METHOD path". Unmatched calls 404 honestly. */
 export function stubFetch(
-  routes: Record<string, { status?: number; body?: unknown }>,
+  routes: Record<string, { status?: number; body?: unknown; sse?: SseStub }>,
 ): { calls: RecordedCall[] } {
   const calls: RecordedCall[] = [];
   const stub = async (input: string | URL | Request, init?: RequestInit) => {
@@ -66,6 +70,14 @@ export function stubFetch(
       return new Response(JSON.stringify({ code: "NOT_FOUND", message: "request failed" }), {
         status: 404,
         headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (route.sse !== undefined) {
+      const stream =
+        typeof route.sse === "string" ? route.sse : route.sse(init?.signal);
+      return new Response(stream, {
+        status: route.status ?? 200,
+        headers: { "Content-Type": "text/event-stream" },
       });
     }
     return new Response(JSON.stringify(route.body ?? null), {
